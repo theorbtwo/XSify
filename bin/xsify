@@ -1,0 +1,28 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+use ExtUtils::XSify;
+use CLang;
+use 5.10.0;
+use ExtUtils::Typemaps;
+use Carp;
+use autodie;
+use Config::Any;
+use Data::Dump::Streamer;
+use charnames ();
+$|=1;
+
+if (!@ARGV) {
+  die "Usage: $0 foo.json";
+}
+
+my $config_any = Config::Any->load_files( { files => \@ARGV, use_ext => 1 } );
+my $config = {};
+
+for my $pair (@$config_any) {
+  my ($config_file, $config_values) = %$pair;
+  $config = {%$config, %$config_values};
+}
+
+ExtUtils::XSify->new($config)->xsify;
