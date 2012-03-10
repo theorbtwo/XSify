@@ -214,6 +214,8 @@ sub handle_type {
                           # pointer types
                           'char*'
                          ];
+
+  print "Trying to handle_type for $c_name\n";
   
   my $kind_raw = $type->getTypeKind;
   state $my_kind_map = {
@@ -1583,20 +1585,20 @@ sub type_to_c_name {
       
       when (4) {
         # C++ doesn't have an explicit tag on uses of a class.
-        return "$const $spelling";
+        return "$const$spelling";
       }
 
       when (5) {
-        return "$const enum $spelling";
+        return "${const}enum $spelling";
       }
 
       when (20) {
         # typedef
-        return "$const $spelling";
+        return "$const$spelling";
       }
 
       when (31) {
-        return "$const typename<$spelling>";
+        return "${const}typename<$spelling>";
       }
 
       default {
@@ -1620,7 +1622,7 @@ sub type_to_c_name {
     return undef;
   } elsif ($type_kind == 106 and $spelling) {
     # spelled enum
-    return "$const enum $spelling";
+    return "${const}enum $spelling";
   } elsif ($spelling) {
     die "Unhandled spelled $type_kind spelled $spelling";
   } elsif ($type_kind == 101) {
@@ -1630,7 +1632,7 @@ sub type_to_c_name {
       warn "Pointer to undefined?";
       return undef;
     }
-    return "$const ${inner_type}*";
+    return "$const${inner_type}*";
   } elsif ($type_kind == 103) {
     #   CXType_LValueReference = 103,
     # pointer
@@ -1641,7 +1643,7 @@ sub type_to_c_name {
     }
     #return $inner_type."&";
     # While the name of a type might need an &, the type of an argument... oh, hell, I think it may need...
-    return "$const $inner_type";
+    return "${const}$inner_type";
 
   } elsif ($type_kind == 105) {
       # CXType_Record -- this is something like typedef struct {} foo.
@@ -1664,7 +1666,7 @@ sub type_to_c_name {
     my $element_type_c = $self->type_to_c_name($type->getArrayElementType);
     my $array_size = $type->getArraySize;
 
-    return "$const typeof(${element_type_c}[${array_size}])";
+    return "${const}typeof(${element_type_c}[${array_size}])";
 
   } else {
     my $filename = $type->getTypeDeclaration->getCursorLocation->getPresumedLocationFilename;
