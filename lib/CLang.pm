@@ -17,16 +17,18 @@ sub CLang::TranslationUnit::DESTROY {
   shift->disposeTranslationUnit;
 }
 
-package CLang::String {
-  use overload '""' => \&stringify;
+{
+    package CLang::String;
 
-  sub DESTROY {
-    shift->disposeString;
-  }
-
-  sub stringify {
-    shift->getCString;
-  }
+    use overload '""' => \&stringify;
+    
+    sub DESTROY {
+        shift->disposeString;
+    }
+    
+    sub stringify {
+        shift->getCString;
+    }
 };
 
 
