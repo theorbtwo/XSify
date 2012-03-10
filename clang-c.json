@@ -1,0 +1,7 @@
+{
+    "compile_me": "clang-c-foo.c",
+    "include_regex": "clang-c",
+    "output_dir": "../generated-clang-c/",
+    "xsfile": "CLangC.xs",
+    "base_module": "CLangC",
+}

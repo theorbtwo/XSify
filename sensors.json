@@ -1,0 +1,10 @@
+{
+  "compile_me": "sensors-foo.c",
+  "include_regex": "sensors",
+  "output_dir": "../generated-sensors/",
+  "xsfile": "Sensors.xs",
+  "base_module": "Sensors",
+  "includes": "#include <sensors/sensors.h>",
+  "ignore_macros": ["LIB_SENSORS_SENSORS_H"],
+}
+
