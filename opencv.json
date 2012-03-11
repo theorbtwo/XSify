@@ -6,7 +6,7 @@
     "xsfile": "OpenCV.xs",
     "xs_filename": "OpenCV.xs",
     "base_module": "OpenCV",
-    "includes": "#undef NORMAL\n#include <opencv2/opencv.hpp>",
+    "includes": "#undef NORMAL\n#define cv opencv_cv\n#include <opencv2/opencv.hpp>\n#undef cv\n",
     "ignore_all_macros": 1,
     "ignore_macros": ["__OPENCV_ALL_HPP__",
                       "__OPENCV_CORE_C_H__",

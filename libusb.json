@@ -1,0 +1,13 @@
+{
+    "compile_me": "libusb-test.c",
+    "include_regex": "libusb",
+    "output_dir": "eg/libusb/",
+    "//comment": "xsfile is for old version, so we can run both and compare",
+    "xsfile": "LibUSB.xs",
+    "xs_filename": "LibUSB.xs",
+    "base_module": "LibUSB",
+    "includes": "#include <libusb-1.0/libusb.h>",
+    "ignore_all_macros": 1,
+    "ignore_macros": [
+                     ],
+}

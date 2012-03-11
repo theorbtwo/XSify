@@ -4,8 +4,8 @@ use strict;
 use ExtUtils::MakeMaker;
 
 WriteMakefile(
-              OPTIMIZE => '-g4 -O0',
-              CC => 'clang',
+#              OPTIMIZE => '-g4 -O0',
+#              CC => 'clang',
               NAME => 'CLang',
               LIBS => ['-lclang'],
               VERSION => '0.001',

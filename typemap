@@ -1,0 +1,137 @@
+TYPEMAP
+CXIndex                  TYPEMAP_CXIndex
+CXTranslationUnit        TYPEMAP_CXTranslationUnit
+CXCursor                 TYPEMAP_CXCursor
+CXString                 TYPEMAP_CXString
+CXType                   TYPEMAP_CXType
+CXSourceLocation         TYPEMAP_CXSourceLocation
+CXSourceRange            TYPEMAP_CXSourceRange
+CXFile                   TYPEMAP_CXFile
+struct CXUnsavedFile *   TYPEMAP_CXUnsavedFile_pointer
+const char * const *     TYPEMAP_const_array_of_const_char_pointer
+
+
+INPUT
+
+TYPEMAP_CXSourceRange
+    /* PVMG: This is a reference to a blessed scalar (and not a blessed reference to a scalar)! */
+    if (!sv_isobject($arg) ||
+        SvTYPE(SvRV($arg)) != SVt_PVMG) {
+      warn( \"${Package}::$func_name() -- $var is not a blessed SV reference\" );
+      XSRETURN_UNDEF;
+    }
+    
+    Copy(SvPV_nolen(SvRV($arg)), &$var, 1, CXSourceRange);
+
+TYPEMAP_CXIndex
+    if( sv_isobject($arg) && (SvTYPE(SvRV($arg)) == SVt_PVMG) )
+      $var = ($type)SvIV((SV*)SvRV( $arg ));
+    else {
+      warn( \"${Package}::$func_name() -- $var is not a blessed SV reference\" );
+            XSRETURN_UNDEF;
+    }
+
+TYPEMAP_CXUnsavedFile_pointer
+    if( sv_isobject($arg) && (SvTYPE(SvRV($arg)) == SVt_PVMG) ) {
+      $var = ($type)SvIV((SV*)SvRV( $arg ));
+    } else if ( !SvOK($arg) ) {
+      $var = NULL;
+    } else {
+      warn( \"${Package}::$func_name() -- $var is not a blessed SV reference\" );
+            XSRETURN_UNDEF;
+    }
+
+TYPEMAP_CXUnsavedFile_pointer
+    if( sv_isobject($arg) && (SvTYPE(SvRV($arg)) == SVt_PVMG) ) {
+      $var = ($type)SvIV((SV*)SvRV( $arg ));
+    } else if ( !SvOK($arg) ) {
+      $var = NULL;
+    } else {
+      warn( \"${Package}::$func_name() -- $var is not a blessed SV reference\" );
+            XSRETURN_UNDEF;
+    }
+
+TYPEMAP_CXTranslationUnit
+    if( sv_isobject($arg) && (SvTYPE(SvRV($arg)) == SVt_PVMG) ) {
+      $var = ($type)SvIV((SV*)SvRV( $arg ));
+    } else if ( !SvOK($arg) ) {
+      $var = NULL;
+    } else {
+      warn( \"${Package}::$func_name() -- $var is not a blessed SV reference\" );
+            XSRETURN_UNDEF;
+    }
+
+TYPEMAP_const_array_of_const_char_pointer
+    if( SvOK($arg) ) {
+        croak(\"Passed a defined value to a const char * const * type\");
+    } else {
+        $var = NULL;
+    }
+
+TYPEMAP_CXCursor
+    /* PVMG: This is a reference to a blessed scalar (and not a blessed reference to a scalar)! */
+    if (!sv_isobject($arg) ||
+        SvTYPE(SvRV($arg)) != SVt_PVMG) {
+      warn( \"${Package}::$func_name() -- $var is not a blessed SV reference\" );
+      XSRETURN_UNDEF;
+    }
+    
+    Copy(SvPV_nolen(SvRV($arg)), &$var, 1, CXCursor);
+
+TYPEMAP_CXString
+    /* PVMG: This is a reference to a blessed scalar (and not a blessed reference to a scalar)! */
+    if (!sv_isobject($arg) ||
+        SvTYPE(SvRV($arg)) != SVt_PVMG) {
+      warn( \"${Package}::$func_name() -- $var is not a blessed SV reference\" );
+      XSRETURN_UNDEF;
+    }
+    
+    Copy(SvPV_nolen(SvRV($arg)), &$var, 1, CXString);
+
+TYPEMAP_CXType
+    /* PVMG: This is a reference to a blessed scalar (and not a blessed reference to a scalar)! */
+    if (!sv_isobject($arg) ||
+        SvTYPE(SvRV($arg)) != SVt_PVMG) {
+      warn( \"${Package}::$func_name() -- $var is not a blessed SV reference\" );
+      XSRETURN_UNDEF;
+    }
+    
+    Copy(SvPV_nolen(SvRV($arg)), &$var, 1, CXType);
+
+TYPEMAP_CXSourceLocation
+    /* PVMG: This is a reference to a blessed scalar (and not a blessed reference to a scalar)! */
+    if (!sv_isobject($arg) ||
+        SvTYPE(SvRV($arg)) != SVt_PVMG) {
+      warn( \"${Package}::$func_name() -- $var is not a blessed SV reference\" );
+      XSRETURN_UNDEF;
+    }
+    
+    Copy(SvPV_nolen(SvRV($arg)), &$var, 1, CXSourceLocation);
+
+TYPEMAP_CXFile
+    /* PVMG: This is a reference to a blessed scalar (and not a blessed reference to a scalar)! */
+    if (!sv_isobject($arg) ||
+        SvTYPE(SvRV($arg)) != SVt_PVMG) {
+      warn( \"${Package}::$func_name() -- $var is not a blessed SV reference\" );
+      XSRETURN_UNDEF;
+    }
+    
+    Copy(SvPV_nolen(SvRV($arg)), &$var, 1, CXFile);
+
+OUTPUT
+TYPEMAP_CXSourceRange
+    sv_setref_pvn( $arg, "CLang::SourceRange", (const char *)&$var, sizeof(CXSourceRange));
+TYPEMAP_CXIndex
+    sv_setref_pv( $arg, "CLang::Index", (void*)$var );
+TYPEMAP_CXTranslationUnit
+    sv_setref_pv( $arg, "CLang::TranslationUnit", (void*)$var );
+TYPEMAP_CXCursor
+    sv_setref_pvn( $arg, "CLang::Cursor", (const char *)&$var, sizeof(CXCursor));
+TYPEMAP_CXString
+    sv_setref_pvn( $arg, "CLang::String", (const char *)&$var, sizeof(CXString));
+TYPEMAP_CXType
+    sv_setref_pvn( $arg, "CLang::Type", (const char *)&$var, sizeof(CXType));
+TYPEMAP_CXSourceLocation
+    sv_setref_pvn( $arg, "CLang::SourceLocation", (const char *)&$var, sizeof(CXSourceLocation));
+TYPEMAP_CXFile
+    sv_setref_pvn( $arg, "CLang::File", (const char *)&$var, sizeof(CXFile));

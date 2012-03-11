@@ -4,5 +4,6 @@
     "output_dir": "../generated-clang-c/",
     "xs_filename": "CLangC.xs",
     "base_module": "CLangC",
-    "includes": "#include <clang-c/Index.h>"
+    "includes": "#include <clang-c/Index.h>",
+    "ignore_macros": ["CLANG_C_INDEX_H", "CINDEX_LINKAGE"],
 }

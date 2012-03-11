@@ -57,7 +57,8 @@ END
 
     my $tu = $index->parseTranslationUnit(#"/usr/include/clang-c/Index.h",
                                           $self->compile_me,
-                                          undef, 0, undef, 0,
+                                          undef, 0,
+                                          undef, 0,
                                           # options -- |ed combination of CXTranslationUnit_Flags
                                           1  # CXTranslationUnit_DetailedPreprocessingRecord
         );
@@ -73,15 +74,19 @@ END
 
     my $xs = '';
 
-    my %done;
-
     while (@todo) {
         my ($todo_item) = shift @todo;
-        
+
         if (exists $todo_item->{cursor}) {
+            state $done = {};
+            if ($done->{$todo_item->{cursor}->getCursorUSR}++) {
+              print "Skipping, already had this cursor-flavoured todo item (why=$todo_item->{why})\n";
+              next;
+            }
+
             my $cursor = $todo_item->{cursor};
             my $kind = $cursor->getCursorKind;
-            
+
             given ($kind) {
                 when ([2, 3, 4]) {
                     # 2: struct
@@ -103,7 +108,7 @@ END
                 when (7) {
                     # enum constant
                     $self->handle_enum_constant($todo_item, \@todo);
-                }
+                  }
                 
                 when ([8,  # function
                        21, # C++ class method
@@ -111,28 +116,28 @@ END
                        25, # destructor
                        26, # conversion function
                       ]) {
-                    $self->handle_function($todo_item, \@todo);
-                }
-
+                  $self->handle_function($todo_item, \@todo);
+                  }
+                
                 when ([ 9, # VarDecl
                         20, # TypedefDecl
                         30, # FunctionTemplate
                       ]) {
-                    # Oh, hell, really can't be arsed right now.
-                    # TypedefDecl
+                  # Oh, hell, really can't be arsed right now.
+                  # TypedefDecl
                 }
-                
+
                 when (300) {
-                    # translation unit
-                    $self->handle_translation_unit($todo_item, \@todo);
+                  # translation unit
+                  $self->handle_translation_unit($todo_item, \@todo);
                 }
-                
+
                 when (501) {
-                    $self->handle_macro_definition($todo_item, \@todo);
+                  $self->handle_macro_definition($todo_item, \@todo);
                 }
 
                 default {
-                    die "In todo-loop, don't know what to do with cursor-flavored todo item kind $kind";
+                  die "In todo-loop, don't know what to do with cursor-flavored todo item kind $kind";
                 }
             }
         } elsif (exists $todo_item->{type}) {
@@ -211,12 +216,27 @@ sub handle_type {
   return if "$c_name" ~~ [
                           # integer types
                           'unsigned int', 'int',
+                          'unsigned long', 'long',
                           # pointer types
                           'char*'
                          ];
 
   print "Trying to handle_type for $c_name\n";
-  
+
+  if ($type->getTypeDeclaration and
+      $type->getTypeDeclaration->getCursorKind !=71, # NoDeclFound
+     ) {
+    push @$todo, {
+                  cursor => $type->getTypeDeclaration,
+                  why => "type used by ($todo_item->{why})",
+                 };
+  } elsif ($type->getPointeeType) {
+    push @$todo, {
+                  cursor => $type->getPointeeType->getTypeDeclaration,
+                  why => "pointee of a type used by ($todo_item->{why})",
+                 };
+  }
+
   my $kind_raw = $type->getTypeKind;
   state $my_kind_map = {
                         # "Unexposed"
@@ -301,6 +321,10 @@ sub handle_type {
     }
 
     when ('enum') {
+      push @$todo, {cursor => $type->getTypeDeclaration,
+                    why => "from used type (enum)",
+                   };
+
       my $xs_name = $self->type_to_xs_name($type);
       $self->typemap->add_typemap(ctype => $c_name, xstype => $xs_name);
       $self->typemap->add_outputmap(xstype => $xs_name,
@@ -406,7 +430,7 @@ sub handle_enum_constant {
 MODULE = $perl_class  PACKAGE = $perl_class
 
 int
-__value_$c_name
+__value_$c_name(void)
  CODE:
   RETVAL = $c_name;
  OUTPUT:
@@ -450,6 +474,7 @@ sub handle_field {
 
     my $cursor = $todo_item->{cursor};
 
+    print STDERR "handle_field, parent_class is: ", $todo_item->{parent_class}, "\n";
     my $class_perl = $self->type_to_perl_name($todo_item->{parent_class});
     my $class_c    = $self->type_to_c_name($todo_item->{parent_class});
     my $field_class_c = $self->type_to_c_name($cursor->getCursorType);
@@ -486,184 +511,262 @@ END
 }
 
 sub handle_function {
-    my ($self, $todo_item, $todo) = @_;
-
-    my $cursor = $todo_item->{cursor};
-
-    my $flavour;
-    given ($cursor->getCursorKind) {
-	when (8) {
-	    $flavour = 'function';
-	}
-	when (21) {
-	    $flavour = 'method';
-	}
-	when (24) {
-	    $flavour = 'constructor';
-	}
-	when (25) {
-	    $flavour = 'destructor';
-	}
-	when (26) {
-	    $flavour = 'conversion';
-	}
-	default {
-	    say "Don't know what sort of function-like-thing has cursor kind $_";
-	    die;
-	}
+  my ($self, $todo_item, $todo) = @_;
+  
+  my $cursor = $todo_item->{cursor};
+  
+  my $flavour;
+  given ($cursor->getCursorKind) {
+    when (8) {
+      $flavour = 'function';
     }
-
-    #my $namespaced_name = namespaced_name($cursor);
-    my $spelling = $cursor->getCursorSpelling;
-    my $filename = $cursor->getCursorLocation->getPresumedLocationFilename;
-    my $line = $cursor->getCursorLocation->getPresumedLocationLine;
-
-    if ($spelling =~ m/^operator/) {
-      
-      if ($spelling =~ m/^operator (\w+)$/) {
-        $spelling = "__convert_to_".$1;
-      } elsif ($spelling =~ m/^operator /) {
-        warn "Ignoring strange operator $spelling";
-        return;
-      } elsif ($spelling =~ m/^operator([-()*\[\]=!&+><\/|^~]+)$/) {
-        $spelling = $1;
-        $spelling = join '_', map {charnames::viacode(ord $_)} split //, $1;
-        $spelling =~ s/ /_/g;
-        $spelling =~ s/-//g;
-        $spelling = '__operator_'.$spelling;
-      } else {
-        die "Er, strange operator spelling of a function-like ($flavour): $spelling";
-      }
-
+    when (21) {
+      $flavour = 'method';
     }
-
-    #print "working on $flavour $namespaced_name from $filename line $line\n";
-
-    my $dead;
-    my $return_type;
-    given ($flavour) {
-      when ('constructor') {
-        $return_type = $todo_item->{parent_class} || $cursor->getCursorSemanticParent->getCursorType;
-      }
-      when (['function', 'method', 'conversion']) {
-        $return_type = $cursor->getCursorResultType;
-      }
-      when ('destructor') {
-        # Will return void, which is what we wanted.
-        $return_type = $cursor->getCursorResultType;
-
-        $spelling = 'DESTROY';
-      }
-      default {
-        die "Getting return type for function-like flavour $flavour";
-      }
+    when (24) {
+      $flavour = 'constructor';
     }
-    my $return_type_c = $self->type_to_c_name($return_type) unless $dead;
-    if (!$return_type_c) {
-	$dead = "can't map return type to a c name";
+    when (25) {
+      $flavour = 'destructor';
     }
-    my $namespaced_name = $self->namespaced_name($cursor);
-    push @$todo, {type => $return_type, why => "return type of $namespaced_name, $filename line $line"}
-      unless ($dead or
-              $return_type_c.'' eq 'void');
-
-    my $arguments = [];
+    when (26) {
+      $flavour = 'conversion';
+    }
+    default {
+      say "Don't know what sort of function-like-thing has cursor kind $_";
+      die;
+    }
+  }
+  
+  my $namespaced_name = $self->namespaced_name($cursor);
+  my $spelling = $cursor->getCursorSpelling;
+  my $filename = $cursor->getCursorLocation->getPresumedLocationFilename;
+  my $line = $cursor->getCursorLocation->getPresumedLocationLine;
+  
+  if ($spelling =~ m/^operator/) {
     
-    my $anon_count = 0;
-
-    $cursor->visitChildren(sub {
-	return 0 if $dead;
-
-	my ($arg_cursor) = @_;
-
-	my $filename = $arg_cursor->getCursorLocation->getPresumedLocationFilename;
-	my $line = $arg_cursor->getCursorLocation->getPresumedLocationLine;
-	
-	given ($arg_cursor->getCursorKind) {
-	    when (10) {
-		# ParmDecl
-		my $name = $arg_cursor->getCursorSpelling || ("anon_".$anon_count++);
-
-		my $c_type = $self->type_to_c_name($arg_cursor->getCursorType);
-		if (not defined $c_type) {
-		    $dead = "cannot map type for argument $name to c type";
-		}
-
-		push @$todo, {type => $arg_cursor->getCursorType, why => "argument type - $namespaced_name(..., $name, ...) from $filename line $line"} unless $dead;
-
-		push @$arguments, [$c_type, $name];
-
-		return 1;
-	    }
-
-	    when (43) {
-		# TypeRef?
-
-		# inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB, StringRef S)
-		# --> class clang::DiagnosticBuilder
-
-		#say "TypeRef as a sub-cursor of a function-like ($flavour) at $filename line $line";
-		#say "spelling: ", $arg_cursor->getCursorSpelling;
-		return 1;
-	    }
-
-	    when (202) {
-		# Compound statement -- the body of a function.  We don't care
-		return 1;
-	    }
-
-	    when (45) {
-		# TemplateRef
-		$dead = 'templatey bit';
-		return 0;
-	    }
-
-	    when (46) {
-		# namespace gubbins?
-		return 1;
-	    }
-	    
-	    when ([ 47, # MemberRef
-		   106, # IntegerLiteral
-		   100, # UnexposedExpr
-		   101, # DeclRefExpr
-		   103, # CallExpr
-                   107, # floating-point literal
-		   130, # Bool const
-		   112, # unary operator
-		   116, # ?:
-		   117, # C-style cast expression
-		   127, # C++ const_cast<>
-		   134, # new Object(foo)
-                   114, # binary operator
-		  ]) {
-		# All these appear to be designated initializer syntax -- wish this interface
-		# was slightly higher-level, so they'd all be children of one parent.
-		return 1;
-	    }
-
-	    default {
-		my $filename = $arg_cursor->getCursorLocation->getPresumedLocationFilename;
-		my $line = $arg_cursor->getCursorLocation->getPresumedLocationLine;
-		die "Don't know what to do with child of a function-like of kind $_ at $filename line $line";
-	    }
-	}
-	
-			    });
-
-    if ($dead) {
-	warn "Cannot output xs for function-like $flavour named $namespaced_name: $dead";
-	return;
+    if ($spelling =~ m/^operator (\w+)$/) {
+      $spelling = "__convert_to_".$1;
+    } elsif ($spelling =~ m/^operator /) {
+      warn "Ignoring strange operator $spelling";
+      return;
+    } elsif ($spelling =~ m/^operator([-()*\[\]=!&+><\/|^~]+)$/) {
+      $spelling = $1;
+      $spelling = join '_', map {charnames::viacode(ord $_)} split //, $1;
+      $spelling =~ s/ /_/g;
+      $spelling =~ s/-//g;
+      $spelling = '__operator_'.$spelling;
+    } else {
+      die "Er, strange operator spelling of a function-like ($flavour): $spelling";
     }
+    
+  }
+  
+  #print "working on $flavour $namespaced_name from $filename line $line\n";
+  
+  my $dead;
+  my $return_type;
+  given ($flavour) {
+    when ('constructor') {
+      $return_type = $todo_item->{parent_class} || $cursor->getCursorSemanticParent->getCursorType;
+    }
+    when (['function', 'method', 'conversion']) {
+      $return_type = $cursor->getCursorResultType;
+    }
+    when ('destructor') {
+      # Will return void, which is what we wanted.
+      $return_type = $cursor->getCursorResultType;
+      
+      $spelling = 'DESTROY';
+    }
+    default {
+      die "Getting return type for function-like flavour $flavour";
+    }
+  }
+  my $return_type_c = $self->type_to_c_name($return_type) unless $dead;
+  if (!$return_type_c) {
+    $dead = "can't map return type to a c name";
+  }
+  
+  push @$todo, {type => $return_type, why => "return type of $namespaced_name, $filename line $line"}
+    unless ($dead or
+            $return_type_c.'' eq 'void');
+  
+  my $arguments = [];
+  
+  my $anon_count = 0;
+  
+  $cursor->visitChildren(sub {
+                           return 0 if $dead;
+                           
+                           my ($arg_cursor) = @_;
+                           
+                           my $filename = $arg_cursor->getCursorLocation->getPresumedLocationFilename;
+                           my $line = $arg_cursor->getCursorLocation->getPresumedLocationLine;
+                           
+                           given ($arg_cursor->getCursorKind) {
+                             when (10) {
+                               # ParmDecl
+                               my $name = $arg_cursor->getCursorSpelling || ("anon_".$anon_count++);
+                               
+                               my $c_type = $self->type_to_c_name($arg_cursor->getCursorType);
+                               if (not defined $c_type) {
+                                 $dead = "cannot map type for argument $name to c type";
+                               }
+                               
+                               push @$todo, {type => $arg_cursor->getCursorType, why => "argument type - $namespaced_name(..., $name, ...) from $filename line $line"} unless $dead;
+                               
+                               push @$arguments, [$c_type, $name];
+                               
+                               return 1;
+                             }
+                             
+                             when (43) {
+                               # TypeRef?
+                               
+                               # inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB, StringRef S)
+                               # --> class clang::DiagnosticBuilder
+                               
+                               #say "TypeRef as a sub-cursor of a function-like ($flavour) at $filename line $line";
+                               #say "spelling: ", $arg_cursor->getCursorSpelling;
+                               return 1;
+                             }
+                             
+                             when (202) {
+                               # Compound statement -- the body of a function.  We don't care
+                               return 1;
+                             }
+                             
+                             when (45) {
+                               # TemplateRef
+                               $dead = 'templatey bit';
+                               return 0;
+                             }
+                             
+                             when (46) {
+                               # namespace gubbins?
+                               return 1;
+                             }
+                             
+                             when ([ 47, # MemberRef
+                                     106, # IntegerLiteral
+                                     100, # UnexposedExpr
+                                     101, # DeclRefExpr
+                                     103, # CallExpr
+                                     107, # floating-point literal
+                                     130, # Bool const
+                                     112, # unary operator
+                                     116, # ?:
+                                     117, # C-style cast expression
+                                     127, # C++ const_cast<>
+                                     134, # new Object(foo)
+                                     114, # binary operator
+                                   ]) {
+                               # All these appear to be designated initializer syntax -- wish this interface
+                               # was slightly higher-level, so they'd all be children of one parent.
+                               return 1;
+                             }
+                             
+                             default {
+                               my $filename = $arg_cursor->getCursorLocation->getPresumedLocationFilename;
+                               my $line = $arg_cursor->getCursorLocation->getPresumedLocationLine;
+                               die "Don't know what to do with child of a function-like of kind $_ at $filename line $line";
+                             }
+                           }
+                           
+                         });
+  
+  if ($dead) {
+    warn "Cannot output xs for function-like $flavour named $namespaced_name: $dead";
+    return;
+  }
+  
+  my $arguments_def_str = join ", ", map {$_->[0].' '.$_->[1]} @$arguments;
+  my $arguments_use_str = join ", ", map {$_->[1]} @$arguments;
+  
+  if ("$spelling" eq "$namespaced_name") {
+    
+    $self->xs_file->print(<<END);
 
-    my $arguments_str = join ", ", map {$_->[0].' '.$_->[1]} @$arguments;
+$return_type_c
+$spelling($arguments_def_str);
+
+END
+  } elsif ($flavour eq 'destructor') {
+    # Just ignore it for now.
+
+  } elsif ($flavour eq 'function' and $return_type_c eq 'void') {
+    $self->xs_file->print(<<END);
+
+void
+$spelling($arguments_def_str)
+ CODE:
+  $namespaced_name($arguments_use_str);
+
+END
+  } elsif ($flavour eq 'method' and $return_type_c eq 'void') {
+    $self->xs_file->print(<<END);
+
+void
+$spelling($arguments_def_str)
+ CODE:
+  THIS->$spelling($arguments_use_str);
+
+END
+  } elsif ($return_type_c eq 'void') {
+    die "flavour=$flavour, returning void";
+  } elsif ($flavour eq 'function') {
+    $self->xs_file->print(<<END);
+
+$return_type_c
+$spelling($arguments_def_str)
+ CODE:
+  RETVAL = $namespaced_name($arguments_use_str);
+ OUTPUT:
+  RETVAL
+
+END
+  } elsif ($flavour eq 'method') {
+    $self->xs_file->print(<<END);
+
+$return_type_c
+$spelling($arguments_def_str)
+ CODE:
+  RETVAL = THIS->$spelling($arguments_use_str);
+ OUTPUT:
+  RETVAL
+
+END
+  } elsif ($flavour eq 'constructor') {
+    $self->xs_file->print(<<END);
+
+$return_type_c
+__new($arguments_def_str)
+ CODE:
+  RETVAL = new $return_type_c($arguments_use_str);
+ OUTPUT:
+  RETVAL
+
+END
+  } elsif ($flavour eq 'conversion') {
+    my $local_name = $return_type_c;
+    $local_name =~ s/ \*/_pointer/;
+    $local_name =~ s/::/_coloncolon_/g;
+    $local_name = "__convert_to_$local_name";
 
     $self->xs_file->print(<<END);
 
 $return_type_c
-$spelling($arguments_str);
+$local_name($arguments_def_str)
+ CODE:
+  RETVAL = $return_type_c($arguments_use_str);
+ OUTPUT:
+  RETVAL
 
 END
+  } else {
+    warn "Non-easy function-like of flavour $flavour";
+  }
 }
 
 sub handle_translation_unit {
@@ -673,19 +776,19 @@ sub handle_translation_unit {
   
   $tu->{cursor}->visitChildren(sub {
                                  my ($cursor, $parent) = @_;
-                                 
+
                                  #say "Kind: ", $cursor->getCursorKind;
                                  #say "Kind: ", $cursor_kinds->{$cursor->getCursorKind};
-                                 
+
                                  my $location = $cursor->getCursorLocation;
                                  #print "Location: $location\n";
                                  #print "Location: $$location\n";
                                  my $filename = $location->getPresumedLocationFilename;
-                                 
+
                                  return 1 unless $filename =~ $self->{include_regex};
-                                 
+
                                  #print "At $filename\n";
-                                 
+
                                  my $kind_names_raw = <<'END';
 /* Declarations */
 /**
@@ -1303,16 +1406,16 @@ CXCursor_InclusionDirective            = 503,
 CXCursor_FirstPreprocessing            = CXCursor_PreprocessingDirective,
 CXCursor_LastPreprocessing             = CXCursor_InclusionDirective
 END
-                                 
+
                                  my $cursor_kinds;
                                  for my $line (split "\n", $kind_names_raw) {
                                    #print "$line\n";
                                    next unless $line =~ m/^\s*CXCursor_([A-Za-z]+)\s* = (\d+),$/;
                                    #print "1: $1, 2: $2\n";
-                                   
+
                                    $cursor_kinds->{$2} = $1;
                                  }
-                                 
+
                                  my $kind_str = $cursor_kinds->{$cursor->getCursorKind};
                                  given ($kind_str) {
                                    # Trying for a smaller list of things that we are interested in,
@@ -1324,23 +1427,24 @@ END
                                           'CXXMethod',
                                           'ConversionFunction',
                                           'Destructor',
-                                          'MacroDefinition',
                                           'VarDecl',
+                                          'MacroDefinition',
                                          ]) {
                                      # Classes go here, and structs do not, because classes
                                      # traditionally contain methods, and structs do not.
-                                     
+
                                      push @$todo, {cursor => $cursor, kind_was=>$kind_str, why => 'translation-unit top-level'};
-                                     
+
                                      return 1;
                                    }
-                                   
+
                                    when ('MacroExpansion') {
                                      # This is not, as one might think, where the bar of #define foo bar goes, but rather is a place where a macro is used.
                                      return 2;
                                    }
-                                   
-                                   when (['ClassTemplate',
+
+                                   when ([
+                                          'ClassTemplate',
                                           'OverloadedDeclRef',
                                           'StructDecl',
                                           'UnionDecl',
@@ -1351,144 +1455,148 @@ END
                                          ]) {
                                      return 1;
                                    }
-                                   
+
                                    when (['UnexposedDecl', 'Namespace', 'UsingDeclaration', 'UsingDirective', 'NamespaceRef', 'InclusionDirective']) {
                                      # WTF is the difference between a "UsingDeclaration" and a "UsingDirective" anyway?
                                      return 2;
                                    }
-                                   
+
                                    default {
                                      die "Don't know what to do with a $kind_str in handle_translationunit (from $filename)";
                                    }
                                  }
-                                 
                                }
                               );
 }
 
 sub handle_record {
-    my ($self, $todo_item, $todo) = @_;
+  my ($self, $todo_item, $todo) = @_;
 
-    my $own_cursor = $todo_item->{cursor};
-    my $own_type = $own_cursor->getCursorType;
-    my $spelling = $own_cursor->getCursorSpelling;
-    say "spelling: $spelling";
+  my $own_cursor = $todo_item->{cursor};
+  my $own_type = $own_cursor->getCursorType;
+  my $spelling = $own_cursor->getCursorSpelling;
+  say "spelling: $spelling";
 
-    my $own_c_name = $self->type_to_c_name($own_type);
-    say "own c name: $own_c_name";
-    my $own_perl_name = $self->type_to_perl_name($own_type);
-    say "own perl name: $own_perl_name";
+  push @$todo, {
+                type => $own_type,
+                why => "type of record declaration from (".$todo_item->{why}.")",
+               };
 
-    my $access;
-    given ($own_cursor->getCursorKind) {
-	when ([2,3]) {
-	    $access = 'public';
-	}
-	when (4) {
-	    $access = 'private';
-	}
-	default {
-	    die "Don't know default access for a $_";
-	}
+  my $own_c_name = $self->type_to_c_name($own_type);
+  say "own c name: $own_c_name";
+  my $own_perl_name = $self->type_to_perl_name($own_type);
+  say "own perl name: $own_perl_name";
+
+  my $access;
+  given ($own_cursor->getCursorKind) {
+    when ([2,3]) {
+      $access = 'public';
     }
+    when (4) {
+      $access = 'private';
+    }
+    default {
+      die "Don't know default access for a $_";
+    }
+  }
 
-    say "access: $access\n";
+  say "access: $access\n";
 
-    $own_cursor->visitChildren(sub {
-	my ($sub_cursor) = @_;
-	
-	#say "Child of record type\n";
-	
-	my $sub_kind = $sub_cursor->getCursorKind;
+  $own_cursor->visitChildren(sub {
+        my ($sub_cursor) = @_;
 
-	#say "sub-kind: $sub_kind";
-	given ($sub_kind) {
-	    when (39) {
-		# CXXAccessSpecifier
-		my $new_access = $sub_cursor->getCXXAccessSpecifier();
-		given ($new_access) {
-		    when (0) {
-			die "Huh, new access level is invalid?"
-		    }
-		    when (1) {
-			$access = 'public';
-		    }
-		    when (2) {
-			$access = 'protected';
-		    }
-		    when (3) {
-			$access = 'private';
-		    }
-		    default {
-			die "New access level $new_access is unknown";
-		    }
-		}
-		say "access level changed to $access";
-	    }
-	    when (1) {
-		warn "Unexposed declaration in record";
-	    }
-	    when ([
-		   6,  # field
-		   9,  # var decl (static method)
-		   21, # method
-		   24, # constructor
-		   25, # destructor
-		   26, # conversion function
-		   #30, # function template
-		  ]) {
-		push @$todo, {
-		    cursor => $sub_cursor,
-		    access => $access,
-		    parent_class => $own_type,
-                    why => 'record element',
-		};
-	    }
-            when ([2,  # struct
-		   3,  # union
-		   4,  # class
-		   5,  # enum
-                   10, # typedef
-		   20, # typedef
-                  ]) {
-              # We explicltly *don't* follow these; if they are needed, we should pick them up when a method, etc, references one of them.
+        #say "Child of record type\n";
+
+        my $sub_kind = $sub_cursor->getCursorKind;
+
+        #say "sub-kind: $sub_kind";
+        given ($sub_kind) {
+          when (39) {
+            # CXXAccessSpecifier
+            my $new_access = $sub_cursor->getCXXAccessSpecifier();
+            given ($new_access) {
+              when (0) {
+                die "Huh, new access level is invalid?"
+              }
+              when (1) {
+                $access = 'public';
+              }
+              when (2) {
+                $access = 'protected';
+              }
+              when (3) {
+                $access = 'private';
+              }
+              default {
+                die "New access level $new_access is unknown";
+              }
             }
-            when (30) {
-              # FunctionTemplate -- a template that takes a templated type:
-              # template<typename _Tp> explicit Mat(const vector<_Tp>& vec, bool copyData=false);
-              # Ignore (for now?)
-            }
-	    when (31) {
-		# I have bugger-all idea wtf this is, to be perfectly honest.
-	    }
-	    when (35) {
-		# using declration, which I think is ignorable... I'm honestly not sure
-		# what that means in C++.
+            say "access level changed to $access";
+          }
+          when (1) {
+            warn "Unexposed declaration in record";
+          }
+          when ([
+                 6,  # field
+                 9,  # var decl (static method)
+                 21, # method
+                 24, # constructor
+                 25, # destructor
+                 26, # conversion function
+                 #30, # function template
+                ]) {
+            push @$todo, {
+                          cursor => $sub_cursor,
+                          access => $access,
+                          parent_class => $own_type,
+                          why => 'record element',
+                         };
+          }
+          when ([2,  # struct
+                 3,  # union
+                 4,  # class
+                 5,  # enum
+                 10, # typedef
+                 20, # typedef
+                ]) {
+            # We explicltly *don't* follow these; if they are needed, we should pick them up when a method, etc, references one of them.
+          }
+          when (30) {
+            # FunctionTemplate -- a template that takes a templated type:
+            # template<typename _Tp> explicit Mat(const vector<_Tp>& vec, bool copyData=false);
+            # Ignore (for now?)
+          }
+          when (31) {
+            # I have bugger-all idea wtf this is, to be perfectly honest.
+          }
+          when (35) {
+            # using declration, which I think is ignorable... I'm honestly not sure
+            # what that means in C++.
 
-		#class DeclContextLookupResult
-		#    : public std::pair<NamedDecl**,NamedDecl**> {
-		#    
-		#	using std::pair<NamedDecl**,NamedDecl**>::operator=;
-		#};
-	    }
-	    when (43) {
-		# TypeRef -- a reference to another type, which has been declared earlier.
-		# template<> class DataDepth<uchar> { public: enum { value = CV_8U, fmt=(int)'u' }; };
-		# This confuses me.
-	    }
-	    when (44) {
-              my $base_perl_name = $self->type_to_perl_name($sub_cursor->getCursorType);
-              say "FIXME: (additional) base class of $own_perl_name is $base_perl_name";
-              push @$todo, {why => "base class of $own_perl_name",
-                            type => $sub_cursor->getCursorType,
-                           };
-            }
+            #class DeclContextLookupResult
+            #    : public std::pair<NamedDecl**,NamedDecl**> {
+            #    
+            #	using std::pair<NamedDecl**,NamedDecl**>::operator=;
+            #};
+          }
+          when (43) {
+            # TypeRef -- a reference to another type, which has been declared earlier.
+            # template<> class DataDepth<uchar> { public: enum { value = CV_8U, fmt=(int)'u' }; };
+            # This confuses me.
+          }
+          when (44) {
+            my $base_perl_name = $self->type_to_perl_name($sub_cursor->getCursorType);
+            say "FIXME: (additional) base class of $own_perl_name is $base_perl_name";
+            push @$todo, {why => "base class of $own_perl_name",
+                          type => $sub_cursor->getCursorType,
+                         };
+          }
             
-	    default {
-		my $filename = $sub_cursor->getCursorLocation->getPresumedLocationFilename;
-		my $line = $sub_cursor->getCursorLocation->getPresumedLocationLine;
-		die "sub-kind $sub_kind in record at $filename line $line";
-	    }
+          default {
+            my $filename = $sub_cursor->getCursorLocation->getPresumedLocationFilename;
+            my $line = $sub_cursor->getCursorLocation->getPresumedLocationLine;
+            die "sub-kind $sub_kind in record at $filename line $line";
+          }
 	}
 	
 	return 1;
@@ -1497,7 +1605,7 @@ sub handle_record {
 
 sub namespaced_name {
     my ($self, $cursor) = @_;
-    croak "namedspaced_name called without two parameters -- it's a method, not a function" if @_ < 2;
+    confess "namespaced_name called without two parameters -- it's a method, not a function" if @_ < 2;
     
     my $kind = $cursor->getCursorKind;
     if ($kind == 1) {
@@ -1541,10 +1649,13 @@ sub type_to_c_name {
 
   my $type_kind = $type->getTypeKind;
 
+  print STDERR "Type kind: $type_kind\n";
   #my $spelling = $type->getTypeDeclaration->getCursorSpelling;
   my $spelling = $self->namespaced_name($type->getTypeDeclaration);
+  print STDERR "Spelling: $spelling\n";
 
   my $const = $type->isConstQualifiedType ? "const " : "";
+  print STDERR "Const: $const\n";
 
   state $simple_type_kinds = {
                               2 => 'void',
@@ -1557,7 +1668,8 @@ sub type_to_c_name {
 			      10 => 'unsigned long',
                               11 => "unsigned long long",
                               # http://clang-developers.42468.n3.nabble.com/llibclang-CXTypeKind-char-types-td3754411.html
-                              13 => "signed char",
+                              # This is a a char, which happens to be signed.
+                              13 => "char",
                               16 => "short",
                               17 => "int",
 			      18 => 'long',
@@ -1568,8 +1680,25 @@ sub type_to_c_name {
   if (exists $simple_type_kinds->{$type_kind}) {
     return $const.$simple_type_kinds->{$type_kind};
   } elsif ($type_kind == 105 and $spelling) {
-    # Class name, no tag.
-    return $const.$spelling;
+    # Record type, could be a struct, could be a class.  Unfortunately, this is one of the few places where it matters.
+    my $decl_kind = $type->getTypeDeclaration->getCursorKind;
+    given ($decl_kind) {
+      when (2) {
+        ##   CXCursor_StructDecl                    = 2,
+        return "${const}struct $spelling";
+      }
+      when (3) {
+        # CXCursor_UnionDecl
+        return "${const}union $spelling";
+      }
+      when (4) {
+        # CXCursor_ClassDecl
+        return "${const}$spelling";
+      }
+      default {
+        die "Unknown decl-kind of record type: $decl_kind";
+      }
+    }
 
   } elsif ($type_kind == 107 and $spelling) {
     # typedef, no tag.
