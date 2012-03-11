@@ -122,9 +122,9 @@ END
                 when ([ 9, # VarDecl
                         20, # TypedefDecl
                         30, # FunctionTemplate
+                        31, # ClassTemplate
                       ]) {
                   # Oh, hell, really can't be arsed right now.
-                  # TypedefDecl
                 }
 
                 when (300) {
