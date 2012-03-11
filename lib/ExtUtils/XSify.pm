@@ -1618,8 +1618,8 @@ sub namespaced_name {
       # CXCursor_NoDeclFound
       return undef;
     }
-    if ($kind == 5 and not $spelling) {
-      # anonymous enum
+    if ($kind ~~ [3, 5] and not $spelling) {
+      # anonymous union / enum
       return undef;
     }
     if (not $spelling) {
