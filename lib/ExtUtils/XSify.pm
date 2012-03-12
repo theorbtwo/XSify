@@ -147,6 +147,12 @@ END
         }
     }
 
+    $self->xs_file->print(<<END);
+
+MODULE = $base  PACKAGE = $base
+
+END
+
     $self->typemap->write(file => $self->output_dir."/typemap") or die;
 
 }
@@ -381,7 +387,7 @@ END
                                    code => <<END);
     if( sv_isobject(\$arg) && (SvTYPE(SvRV(\$arg)) == SVt_PVMG) ) {
       /* FIXME: Should probably check if isa $perl_name */
-      \$var = (\$type)SvIV((SV*)SvRV( \$arg ));
+      \$var = (\$type)SvPV_nolen((SV*)SvRV( \$arg ));
     } else if ( !SvOK(\$arg) ) {
       \$var = NULL;
     } else {
