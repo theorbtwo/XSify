@@ -69,6 +69,9 @@ clang_getTranslationUnitCursor(CXTranslationUnit tu);
 
 MODULE = Clang::Cursor  PACKAGE = CLang::Cursor  PREFIX = clang_
 
+CXCursor
+clang_getCursorDefinition(CXCursor c);
+
 void
 visitChildren(CXCursor cursor, CV* callback)
   CODE:

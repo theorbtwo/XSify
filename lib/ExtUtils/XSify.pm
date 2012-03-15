@@ -223,6 +223,7 @@ sub handle_type {
                           # integer types
                           'unsigned int', 'int',
                           'unsigned long', 'long',
+                          'size_t', 'ssize_t',
                           # pointer types
                           'char*'
                          ];
@@ -373,31 +374,157 @@ END
     }
 
 END
+
+#      $self->xs_file->print(<<END);
+#
+#
+#MODULE = $perl_name  PACKAGE = $perl_name
+#
+#$c_name
+#__allocate(char *self)
+#  OUTPUT:
+#    RETVAL
+#
+#END
     }
     
     when ('pointer') {
       my $xs_name = $self->type_to_xs_name($type);
       $self->typemap->add_typemap(ctype => $c_name,
-                            xstype => $xs_name);
+                                  xstype => $xs_name);
       $self->typemap->add_outputmap(xstype => $xs_name,
                                     code => <<END);
-	    sv_setref_pv( \$arg, "$perl_name", (void*)\$var );
+	    sv_setref_iv( \$arg, "$perl_name", (int)\$var );
 END
       $self->typemap->add_inputmap(xstype => $xs_name,
                                    code => <<END);
-    if( sv_isobject(\$arg) && (SvTYPE(SvRV(\$arg)) == SVt_PVMG) ) {
-      /* FIXME: Should probably check if isa $perl_name */
-      \$var = (\$type)SvPV_nolen((SV*)SvRV( \$arg ));
+    if( sv_isobject(\$arg) && sv_does(\$arg, \\"$perl_name\\") ) {
+      \$var = (\$type)SvIV((SV*)SvRV( \$arg ));
     } else if ( !SvOK(\$arg) ) {
       \$var = NULL;
     } else {
-      warn( \\"\${Package}::\$func_name() -- \$var is not a blessed SV reference\\" );
+      warn( \\"\${Package}::\$func_name() -- \$var is not a $perl_name\\" );
       XSRETURN_UNDEF;
     }
 
 END
+
+      my $make_dereference;
+      my $make_enreference;
+      my $make_allocate;
+
+      # Right.  Now we need to figure out if we can actually handle the type that this points at.
+      my $canon_pointee = $type->getPointeeType->getCanonicalType;
+      my $canon_pointee_type_kind = $canon_pointee->getTypeKind;
+      my $canon_pointee_decl_kind = $canon_pointee->getTypeDeclaration->getCursorKind;
+      my $canon_pointee_definition = $canon_pointee->getTypeDeclaration->getCursorDefinition;
+      my $canon_pointee_definition_kind = $canon_pointee_definition->getCursorKind;
+      #print "Canon pointee type kind: $canon_pointee_type_kind\n";
+      print "Canon pointee decl kind: $canon_pointee_decl_kind\n";
+      #print "Canon pointee defintion: $canon_pointee_definition\n";
+      #print "Canon pointee defintion: $$canon_pointee_definition\n";
+      print "Canon pointee definition kind: $canon_pointee_definition_kind\n";
+
+      if ($canon_pointee_type_kind == 2) {
+        # void*
+      } elsif ($canon_pointee_type_kind ~~ [5, 13, 17]) {
+        # A pointer to a unsigned char
+        # A pointer to a char (signed)
+        # A pointer to an int
+        print "Pointer to a simple thing, make en/dereferencers?\n";
+      } elsif ($canon_pointee_type_kind == 101) {
+        # A pointer to a pointer.  These don't need an explicit declaration of the pointee type, they should always be safe:
+        # libusb_context**
+
+        push @$todo, {type => $type->getPointeeType,
+                      why => "pointee type from (".$todo_item->{why}.")"
+                     };
+        
+        $make_dereference = 1;
+        $make_enreference = 1;
+        $make_allocate = 1;
+      } elsif ($canon_pointee_type_kind == 105) {
+        # 105: A pointer to a record.
+        # These need an explicit definition of the pointee type -- we can't make a dereferencer to a struct type that has only a forward declaration, but not real definition.
+        if ($canon_pointee_definition_kind == 2) {
+          # CXCursor_StructDecl
+          print "Pointer to a defined record, make en/dereferencers\n";
+          $make_dereference=1;
+          $make_enreference=1;
+          $make_allocate=1;
+        } elsif ($canon_pointee_definition_kind == 70) {
+          # CXCursor_InvalidFile (or CXCursor_FirstInvalid)
+          # We can't dereference these, but we can allocate and enreference them.
+          $make_allocate = 1;
+          $make_enreference = 1;
+          print "Non-dereferenceable perl name $perl_name\n";
+        } else {
+          die "Pointer to a record, cpdk = $canon_pointee_definition_kind";
+        }
+      } else {
+        die "Not sure if $c_name can have a dereferencer -- canon_pointee_type_kind == $canon_pointee_type_kind";
+      }
+
+      if ($make_dereference and !$type->getPointeeType->isConstQualifiedType
+         ) {
+        # isConstQualifiedType should hopefully go away...
+        my $deref_c_name = $self->type_to_c_name($type->getPointeeType);
+        push @$todo, {type => $type->getPointeeType,
+                      why => "pointee type for (". $todo_item->{why} .")"};
+
+        $self->xs_file->print(<<END);
+
+MODULE = $perl_name  PACKAGE = $perl_name
+
+$deref_c_name
+__dereference($c_name pointer)
+  CODE:
+    RETVAL = *pointer;
+  OUTPUT:
+    RETVAL
+
+END
+      }
+
+      if ($make_enreference) {
+        my $deref_perl_name = $self->type_to_perl_name($type->getPointeeType);
+        my $deref_c_name    = $self->type_to_c_name($type->getPointeeType);
+
+
+        $self->xs_file->print(<<END);
+
+MODULE = $deref_perl_name  PACKAGE = $deref_perl_name
+
+$c_name
+__enreference(SV *base)
+  CODE:
+    /* FIXME: Check that base is a reasonable type of SV first. */
+    SV *inside = SvRV(base);
+    RETVAL = ($c_name)&(SvIVX(inside));
+  OUTPUT:
+    RETVAL
+
+END
+      }
+
+      if ($make_allocate) {
+        $self->xs_file->print(<<END);
+
+MODULE = $perl_name  PACKAGE = $perl_name
+
+$c_name
+__allocate(char *self)
+  CODE:
+    RETVAL = NULL;
+  OUTPUT:
+    RETVAL
+
+END
+      }
+
     }
-    
+
+
     default {
       die "handle_type for c_name=$c_name, perl_name=$perl_name, kind = $kind ($kind_raw)";
     }
@@ -480,7 +607,7 @@ sub handle_field {
 
     my $cursor = $todo_item->{cursor};
 
-    print STDERR "handle_field, parent_class is: ", $todo_item->{parent_class}, "\n";
+    #print STDERR "handle_field, parent_class is: ", $todo_item->{parent_class}, "\n";
     my $class_perl = $self->type_to_perl_name($todo_item->{parent_class});
     my $class_c    = $self->type_to_c_name($todo_item->{parent_class});
     my $field_class_c = $self->type_to_c_name($cursor->getCursorType);
@@ -1655,13 +1782,13 @@ sub type_to_c_name {
 
   my $type_kind = $type->getTypeKind;
 
-  print STDERR "Type kind: $type_kind\n";
+  #print STDERR "Type kind: $type_kind\n";
   #my $spelling = $type->getTypeDeclaration->getCursorSpelling;
   my $spelling = $self->namespaced_name($type->getTypeDeclaration);
-  print STDERR "Spelling: $spelling\n";
+  #print STDERR "Spelling: $spelling\n";
 
   my $const = $type->isConstQualifiedType ? "const " : "";
-  print STDERR "Const: $const\n";
+  #print STDERR "Const: $const\n";
 
   state $simple_type_kinds = {
                               2 => 'void',
@@ -1834,7 +1961,7 @@ sub type_to_perl_name {
   #}
 
   $perl_name =~ s/ /_/g;
-  $perl_name =~ s/\*//g;
+  $perl_name =~ s/\*/_Pointer/g;
 
   return $perl_name;
 }
