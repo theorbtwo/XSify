@@ -310,14 +310,46 @@ sub handle_type {
   }
   
   if ($kind eq 'typedef') {
-    #if (type_to_c_name($type->getCanonicalType)) {
-    #  my $xs_name = type_to_xs_name($type->getCanonicalType);
-    #  $typemap->add_typemap(ctype => $c_name,
-    #                        xstype => $xs_name);
-    #  return;
-    #} else {
+    if ($self->type_to_c_name($type->getCanonicalType)) {
+      my $inner_type = $type->getCanonicalType;
+      my $inner_xs_name = $self->type_to_xs_name($inner_type);
+      my $inner_c_name = $self->type_to_c_name($inner_type);
+      my $inner_kind = $inner_type->getTypeKind;
+      
+      # Hm.  What I'd really like is for inner_xs_name to be *right* here,
+      # but the clearest way I see to do that is to duplicate lots of code from handle_type
+      # to type_to_xs_name in order to do that.
+      
+      if ($inner_c_name ~~ ['unsigned char', 'unsigned short', 'unsigned int',
+                            'unsigned long long']) {
+        $self->typemap->add_typemap(ctype => $c_name, xstype => 'T_UV');
+      } elsif ($inner_c_name ~~ ['unsigned char', 'const unsigned short', 'const unsigned int',
+                                 'const unsinged long long']) {
+        # Looses a "const"
+        $self->typemap->add_typemap(ctype => $c_name, xstype => 'T_UV');
+      } elsif ($inner_c_name ~~ ['int', 'long', 'long long']) {
+        $self->typemap->add_typemap(ctype => $c_name, xstype => 'T_IV');
+      } elsif ($inner_c_name eq 'void*') {
+        $kind = 'nonpointer';
+      } elsif ($inner_type->getTypeKind ~~ [101, # Pointer
+                                            103, # &-reference-thingy
+                                            105, # record
+                                            106, # enum
+                                           ]) {
+        $self->typemap->add_typemap(ctype => $c_name,
+                                    xstype => $inner_xs_name);
+      } else {
+        my $filename = $type->getTypeDeclaration->getCursorLocation->getPresumedLocationFilename;
+        my $line = $type->getTypeDeclaration->getCursorLocation->getPresumedLocationLine;
+        die "$c_name is a typedef for $inner_c_name, xs_name $inner_xs_name, inner_kind $inner_kind, declared on $filename line $line";
+      }
+
+      #$self->typemap->add_typemap(ctype => $c_name,
+      #                            xstype => $xs_name);
+      return;
+    } else {
       $kind = 'nonpointer';
-    #}
+    }
   }
   
   given ($kind) {
@@ -375,17 +407,18 @@ END
 
 END
 
-#      $self->xs_file->print(<<END);
-#
-#
-#MODULE = $perl_name  PACKAGE = $perl_name
-#
-#$c_name
-#__allocate(char *self)
-#  OUTPUT:
-#    RETVAL
-#
-#END
+      $self->xs_file->print(<<END);
+
+
+MODULE = $perl_name  PACKAGE = $perl_name
+
+$c_name
+__allocate(char *self)
+  CODE:
+  OUTPUT:
+    RETVAL
+
+END
     }
     
     when ('pointer') {
@@ -427,10 +460,16 @@ END
 
       if ($canon_pointee_type_kind == 2) {
         # void*
-      } elsif ($canon_pointee_type_kind ~~ [5, 13, 17]) {
-        # A pointer to a unsigned char
-        # A pointer to a char (signed)
-        # A pointer to an int
+      } elsif ($canon_pointee_type_kind ~~ [3, 5, 9, 11, 13, 14, 17, 21, 22]) {
+        # 3: A pointer to a bool
+        # 5: A pointer to a unsigned char
+        # 9: to an unsigned int
+        # 11: to an unsigned long long
+        # 13: A pointer to a char (signed)
+        # 14: to a signed char
+        # 17: A pointer to an int
+        # 21: to a float
+        # 22: to a double
         print "Pointer to a simple thing, make en/dereferencers?\n";
       } elsif ($canon_pointee_type_kind == 101) {
         # A pointer to a pointer.  These don't need an explicit declaration of the pointee type, they should always be safe:
@@ -446,8 +485,10 @@ END
       } elsif ($canon_pointee_type_kind == 105) {
         # 105: A pointer to a record.
         # These need an explicit definition of the pointee type -- we can't make a dereferencer to a struct type that has only a forward declaration, but not real definition.
-        if ($canon_pointee_definition_kind == 2) {
-          # CXCursor_StructDecl
+        if ($canon_pointee_definition_kind ~~ [2, 3, 4]) {
+          # 2: CXCursor_StructDecl
+          # 3: CXCursor_UnionDecl
+          # 4: CXCursor_ClassDecl
           print "Pointer to a defined record, make en/dereferencers\n";
           $make_dereference=1;
           $make_enreference=1;
@@ -536,6 +577,7 @@ sub type_to_xs_name {
   die if @_ < 2;
 
   my $xsname = $self->type_to_c_name($type);
+
   $xsname =~ s/\*/_Star/g;
   $xsname =~ s/\&/_Amp/g;
   $xsname =~ s/ /_/g;
@@ -1751,8 +1793,8 @@ sub namespaced_name {
       # CXCursor_NoDeclFound
       return undef;
     }
-    if ($kind ~~ [3, 5] and not $spelling) {
-      # anonymous union / enum
+    if ($kind ~~ [2, 3, 5] and not $spelling) {
+      # anonymous struct / union / enum
       return undef;
     }
     if (not $spelling) {
@@ -1922,7 +1964,9 @@ sub type_to_c_name {
 
     return undef;
   } elsif ($type_kind == 111) {
-    return 'FIXME_paren_expr';
+    warn "Type of a function";
+
+    return undef;
 
   } elsif ($type_kind == 112) {
     my $element_type_c = $self->type_to_c_name($type->getArrayElementType);
