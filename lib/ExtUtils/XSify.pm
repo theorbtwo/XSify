@@ -296,6 +296,9 @@ sub handle_type {
       when (5) {
         $kind = 'enum';
       }
+      when (20) {
+        $kind = 'typedef';
+      }
       when (31) {
         # This isn't really a type, it's a reference to a template parameter.
         return;
@@ -315,6 +318,9 @@ sub handle_type {
       my $inner_xs_name = $self->type_to_xs_name($inner_type);
       my $inner_c_name = $self->type_to_c_name($inner_type);
       my $inner_kind = $inner_type->getTypeKind;
+      
+      push(@$todo, {type => $inner_type,
+                    why => "typedef from $c_name (".$todo_item->{why}.")"});
       
       # Hm.  What I'd really like is for inner_xs_name to be *right* here,
       # but the clearest way I see to do that is to duplicate lots of code from handle_type
@@ -687,9 +693,9 @@ END
 
 sub handle_function {
   my ($self, $todo_item, $todo) = @_;
-  
+
   my $cursor = $todo_item->{cursor};
-  
+
   my $flavour;
   given ($cursor->getCursorKind) {
     when (8) {
@@ -712,40 +718,43 @@ sub handle_function {
       die;
     }
   }
-  
-  my $namespaced_name = $self->namespaced_name($cursor);
+
+  my $operator;
   my $spelling = $cursor->getCursorSpelling;
+  my $namespaced_name = $self->namespaced_name($cursor);
+  my $call_spelling = $namespaced_name;
   my $filename = $cursor->getCursorLocation->getPresumedLocationFilename;
   my $line = $cursor->getCursorLocation->getPresumedLocationLine;
-  
+
   if ($spelling =~ m/^operator/) {
-    
     if ($spelling =~ m/^operator (\w+)$/) {
       $spelling = "__convert_to_".$1;
     } elsif ($spelling =~ m/^operator /) {
       warn "Ignoring strange operator $spelling";
       return;
     } elsif ($spelling =~ m/^operator([-()*\[\]=!&+><\/|^~]+)$/) {
+      $operator = $1;
       $spelling = $1;
       $spelling = join '_', map {charnames::viacode(ord $_)} split //, $1;
       $spelling =~ s/ /_/g;
       $spelling =~ s/-//g;
       $spelling = '__operator_'.$spelling;
+      $flavour = 'operator';
     } else {
       die "Er, strange operator spelling of a function-like ($flavour): $spelling";
     }
-    
   }
-  
+
   #print "working on $flavour $namespaced_name from $filename line $line\n";
-  
+
   my $dead;
   my $return_type;
   given ($flavour) {
     when ('constructor') {
       $return_type = $todo_item->{parent_class} || $cursor->getCursorSemanticParent->getCursorType;
+      $spelling = "new";
     }
-    when (['function', 'method', 'conversion']) {
+    when (['function', 'method', 'conversion', 'operator']) {
       $return_type = $cursor->getCursorResultType;
     }
     when ('destructor') {
@@ -758,11 +767,69 @@ sub handle_function {
       die "Getting return type for function-like flavour $flavour";
     }
   }
+
   my $return_type_c = $self->type_to_c_name($return_type) unless $dead;
   if (!$return_type_c) {
     $dead = "can't map return type to a c name";
   }
-  
+
+  if ($flavour ne 'destructor') {
+    # We can't tell in advance of seeing the second name if this is an
+    # overloaded name (a multimethod, to use the perl6 parlance).
+    # Therefore, we need to decorate all names.  (We could get away
+    # with all C++ names, but this is probably easier.)
+    my $escaped_usr = $cursor->getCursorUSR;
+    $escaped_usr =~ s/([^A-Za-z0-9])/sprintf "_%02X", ord $1/ge;
+    $spelling .= "___".$escaped_usr;
+  }
+
+
+  # template<> inline uchar saturate_cast<uchar>(schar v)
+  # { return (uchar)std::max((int)v, 0); }
+
+  # inline uchar saturate_cast(schar v) { return (uchar)std::max((int)v, 0); }
+
+  warn "thingy: $filename line $line" if $spelling eq 'saturate_cast___c_3Aoperations_2Ehpp_403665_40N_40cv_40F_40saturate_5Fcast_23C_23';
+
+  say "Display name: ", $cursor->getCursorDisplayName;
+  say "Declared at $filename line $line";
+  # Always 71, "CXCursor_NoDeclFound".
+  #my $template_cursor_kind = $cursor->getTemplateCursorKind;
+  #say "Template cursor kind: $template_cursor_kind";
+  my $specialized_cursor = $cursor->getSpecializedCursorTemplate;
+  say "Specialized cursor kind: ", $specialized_cursor->getCursorKind;
+  say "Specialized cursor spelling: ", $specialized_cursor->getCursorSpelling;
+
+  my $template_args_count = undef;
+
+  if ($specialized_cursor->getCursorKind == 30) {
+    # 30 = CXCursor_FunctionTemplate
+
+    # Er, something goes here.
+    say "Specialization of a template on $filename line $line";
+
+    $template_args_count = 0;
+
+    $specialized_cursor->visitChildren(sub {
+                                         my ($arg_cursor) = @_;
+
+                                         my $arg_kind = $arg_cursor->getCursorKind;
+
+                                         given ($arg_kind) {
+                                           when (27) {
+                                             # TemplateTypeParameter
+                                             $template_args_count++;
+                                           }
+
+                                           default {
+                                             die "Unhandled child of function template: $arg_kind";
+                                           }
+                                         }
+                                       });
+  }
+
+  #$cursor = $specialized_cursor if($specialized_cursor->getCursorKind == 30);;
+
   push @$todo, {type => $return_type, why => "return type of $namespaced_name, $filename line $line"}
     unless ($dead or
             $return_type_c.'' eq 'void');
@@ -771,58 +838,62 @@ sub handle_function {
   
   my $anon_count = 0;
   
+  my @template_args;
+
   $cursor->visitChildren(sub {
                            return 0 if $dead;
-                           
+
                            my ($arg_cursor) = @_;
-                           
+
                            my $filename = $arg_cursor->getCursorLocation->getPresumedLocationFilename;
                            my $line = $arg_cursor->getCursorLocation->getPresumedLocationLine;
-                           
+                           my $spelling = $arg_cursor->getCursorSpelling // 'unspelt';
+
+                           my $arg_kind = $arg_cursor->getCursorKind;
+                           say "at $filename $line, kind=$arg_kind spelling $spelling";
+
                            given ($arg_cursor->getCursorKind) {
                              when (10) {
                                # ParmDecl
                                my $name = $arg_cursor->getCursorSpelling || ("anon_".$anon_count++);
-                               
+
                                my $c_type = $self->type_to_c_name($arg_cursor->getCursorType);
                                if (not defined $c_type) {
                                  $dead = "cannot map type for argument $name to c type";
                                }
-                               
+
                                push @$todo, {type => $arg_cursor->getCursorType, why => "argument type - $namespaced_name(..., $name, ...) from $filename line $line"} unless $dead;
-                               
+
                                push @$arguments, [$c_type, $name];
-                               
+
                                return 1;
                              }
-                             
+
                              when (43) {
-                               # TypeRef?
-                               
-                               # inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB, StringRef S)
-                               # --> class clang::DiagnosticBuilder
-                               
-                               #say "TypeRef as a sub-cursor of a function-like ($flavour) at $filename line $line";
-                               #say "spelling: ", $arg_cursor->getCursorSpelling;
+                               # TypeRef
+                               # These seem to *sometimes* be template args.  Sometimes they are the return type...
+
+                               push @template_args, $spelling;
+
                                return 1;
                              }
-                             
+
                              when (202) {
                                # Compound statement -- the body of a function.  We don't care
                                return 1;
                              }
-                             
+
                              when (45) {
                                # TemplateRef
                                $dead = 'templatey bit';
                                return 0;
                              }
-                             
+
                              when (46) {
                                # namespace gubbins?
                                return 1;
                              }
-                             
+
                              when ([ 47, # MemberRef
                                      106, # IntegerLiteral
                                      100, # UnexposedExpr
@@ -848,20 +919,66 @@ sub handle_function {
                                die "Don't know what to do with child of a function-like of kind $_ at $filename line $line";
                              }
                            }
-                           
                          });
   
   if ($dead) {
     warn "Cannot output xs for function-like $flavour named $namespaced_name: $dead";
     return;
   }
-  
+
+  if (@template_args != $template_args_count||0) {
+    warn "Unexpected number of template args, wanted $template_args_count, got ", 0+@template_args;
+  }
+
+  if (defined $template_args_count) {
+    my $template_args = join ", ", @template_args;
+    $call_spelling = "$call_spelling<$template_args>";
+  }
+
   my $arguments_def_str = join ", ", map {$_->[0].' '.$_->[1]} @$arguments;
   my $arguments_use_str = join ", ", map {$_->[1]} @$arguments;
   
-  if ("$spelling" eq "$namespaced_name") {
+  if ($flavour ~~ ['method', 'operator']) {
+    # THIS needs to go in the arguments_def_str, but not in the arguments_use_str.
+    my $parent_cursor = $cursor->getCursorSemanticParent;
+    my $c_type = $self->type_to_c_name($parent_cursor->getCursorType);
+    
+    $arguments_def_str = "$c_type THIS, $arguments_def_str";
+  }
+  
+  my $package;
+  if ($flavour eq 'function') {
+    $package = $self->base_module;
+  } elsif ($flavour ~~ ['method', 'constructor', 'conversion', 'destructor', 'operator']) {
+    $package = $self->type_to_perl_name($cursor->getCursorSemanticParent->getCursorType);
+  } else {
+    die "Need package for function-like flavour $flavour, namespaced_name: $namespaced_name";
+  }
+
+  my $package_line = "MODULE = $package  PACKAGE = $package";
+
+  if ($self->type_is_reference($return_type)) {
+    if (!$arguments_def_str) {
+
+      $self->xs_file->print(<<END);
+
+$package_line
+
+# CASE A
+
+$return_type_c
+$spelling($arguments_def_str);
+
+END
+    }
+    die "Return type is a reference type ($return_type_c) on $spelling (because of ".$todo_item->{why}.")";
+  } elsif ("$spelling" eq "$namespaced_name") {
     
     $self->xs_file->print(<<END);
+
+$package_line
+
+# CASE B
 
 $return_type_c
 $spelling($arguments_def_str);
@@ -873,30 +990,127 @@ END
   } elsif ($flavour eq 'function' and $return_type_c eq 'void') {
     $self->xs_file->print(<<END);
 
+$package_line
+
+# CASE C
+
 void
 $spelling($arguments_def_str)
  CODE:
   $namespaced_name($arguments_use_str);
 
 END
-  } elsif ($flavour eq 'method' and $return_type_c eq 'void') {
-    $self->xs_file->print(<<END);
+  } elsif ($flavour eq 'operator') {
+    my $retval_eq;
+    my $output;
+    if ($return_type_c eq 'void') {
+      $retval_eq = '';
+      $output = '';
+    } else {
+      $retval_eq = 'RETVAL =';
+      $output = " OUTPUT:\n  RETVAL\n";
+    }
 
-void
-$spelling($arguments_def_str)
- CODE:
-  THIS->$spelling($arguments_use_str);
+    given($operator) {
+      when (['()', '[]']) {
+        # circumfixish?  What is the best term for this?
+        my ($left, $right) = split //, $operator;
 
-END
-  } elsif ($return_type_c eq 'void') {
-    die "flavour=$flavour, returning void";
-  } elsif ($flavour eq 'function') {
-    $self->xs_file->print(<<END);
+        $self->xs_file->print(<<END);
+
+$package_line
+
+# CASE D
 
 $return_type_c
 $spelling($arguments_def_str)
  CODE:
-  RETVAL = $namespaced_name($arguments_use_str);
+  $retval_eq THIS${left}${arguments_use_str}${right};
+$output
+
+END
+      }
+
+      when (['->', 
+             sub {
+               (($operator eq '*') and
+                # * with one argument is a binary operator (multipication).  If it had no arguments, it'd be a prefix deref operator.
+                (@$arguments == 1)
+               )
+             }]) {
+        # Binary operators
+        my $right = $arguments->[1][1];
+
+        $self->xs_file->print(<<END);
+
+$package_line
+
+# CASE E
+
+$return_type_c
+$spelling($arguments_def_str)
+ CODE:
+  $retval_eq THIS $operator $right;
+$output
+
+END
+      }
+
+      when (['++', '--',
+             sub {
+               (($operator eq '*') and
+                # * with no arguments is a prefix operator (deref).
+                (@$arguments == 0)
+               )
+             }]) {
+        # Prefix operators
+        $self->xs_file->print(<<END);
+
+$package_line
+
+# CASE F
+
+$return_type_c
+$spelling($arguments_def_str)
+ CODE:
+  $retval_eq ${operator}THIS;
+$output
+
+END
+      }
+      
+      default {
+        die "Don't have output template for operator $operator";
+      }
+    }
+
+  } elsif ($flavour eq 'method' and $return_type_c eq 'void') {
+    $self->xs_file->print(<<END);
+
+$package_line
+
+# CASE G
+
+void
+$spelling($arguments_def_str)
+ CODE:
+  THIS.$call_spelling($arguments_use_str);
+
+END
+  } elsif ($return_type_c eq 'void') {
+    die "flavour=$flavour, returning void";
+
+  } elsif ($flavour eq 'function') {
+    $self->xs_file->print(<<END);
+
+$package_line
+
+# CASE H
+
+$return_type_c
+$spelling($arguments_def_str)
+ CODE:
+  RETVAL = $call_spelling($arguments_use_str);
  OUTPUT:
   RETVAL
 
@@ -904,10 +1118,14 @@ END
   } elsif ($flavour eq 'method') {
     $self->xs_file->print(<<END);
 
+$package_line
+
+# CASE I
+
 $return_type_c
 $spelling($arguments_def_str)
  CODE:
-  RETVAL = THIS->$spelling($arguments_use_str);
+  RETVAL = THIS.$call_spelling($arguments_use_str);
  OUTPUT:
   RETVAL
 
@@ -915,8 +1133,12 @@ END
   } elsif ($flavour eq 'constructor') {
     $self->xs_file->print(<<END);
 
+$package_line
+
+# CASE J
+
 $return_type_c
-__new($arguments_def_str)
+$spelling($arguments_def_str)
  CODE:
   RETVAL = new $return_type_c($arguments_use_str);
  OUTPUT:
@@ -931,6 +1153,10 @@ END
 
     $self->xs_file->print(<<END);
 
+$package_line
+
+# CASE K
+
 $return_type_c
 $local_name($arguments_def_str)
  CODE:
@@ -939,9 +1165,18 @@ $local_name($arguments_def_str)
   RETVAL
 
 END
+
   } else {
-    warn "Non-easy function-like of flavour $flavour";
+    die "Unhandled function-like of flavour $flavour";
   }
+
+  say "\n";
+}
+
+sub type_is_reference {
+  my ($self, $type) = @_;
+
+  return 1 if $type->getTypeKind ~~ [103, 104];
 }
 
 sub handle_translation_unit {
@@ -1876,6 +2111,13 @@ sub type_to_c_name {
     }
 
   } elsif ($type_kind == 107 and $spelling) {
+    my $canon = $type->getCanonicalType;
+    my $ref = $self->type_is_reference($canon);
+
+    if ($ref) {
+      return undef;
+    }
+
     # typedef, no tag.
     return $const.$spelling;
 
@@ -1902,7 +2144,8 @@ sub type_to_c_name {
       }
 
       when (31) {
-        return "${const}typename<$spelling>";
+        #return "${const}typename<$spelling>";
+        return undef;
       }
 
       default {
@@ -1939,13 +2182,15 @@ sub type_to_c_name {
     return "$const${inner_type}*";
   } elsif ($type_kind == 103) {
     #   CXType_LValueReference = 103,
-    # pointer
+
+    return undef;
+
     my $inner_type = $self->type_to_c_name($type->getPointeeType);
     if (not defined $inner_type) {
       warn "&-reference to undefined type?";
       return undef;
     }
-    #return $inner_type."&";
+
     # While the name of a type might need an &, the type of an argument... oh, hell, I think it may need...
     return "${const}$inner_type";
 
@@ -1970,9 +2215,11 @@ sub type_to_c_name {
 
   } elsif ($type_kind == 112) {
     my $element_type_c = $self->type_to_c_name($type->getArrayElementType);
+    return if not defined $element_type_c;
     my $array_size = $type->getArraySize;
 
-    return "${const}typeof(${element_type_c}[${array_size}])";
+    #return "${const}typeof(${element_type_c}[${array_size}])";
+    return "${const}$element_type_c*";
 
   } else {
     my $filename = $type->getTypeDeclaration->getCursorLocation->getPresumedLocationFilename;

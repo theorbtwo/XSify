@@ -95,6 +95,9 @@ clang_getCursorExtent(CXCursor cursor);
 CXString
 clang_getCursorSpelling(CXCursor cursor);
 
+CXString
+clang_getCursorDisplayName(CXCursor cursor);
+
 CXType
 clang_getCursorResultType(CXCursor cursor);
 
@@ -103,6 +106,13 @@ clang_getCXXAccessSpecifier(CXCursor cursor);
 
 CXCursor
 clang_getCursorSemanticParent(CXCursor cursor);
+
+int
+clang_getTemplateCursorKind(CXCursor C);
+
+CXCursor
+clang_getSpecializedCursorTemplate(CXCursor C);
+
 
 MODULE = CLang::String  PACKAGE = CLang::String  PREFIX = clang_
 

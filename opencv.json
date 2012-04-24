@@ -23,7 +23,7 @@
                       "CV_BIG_INT",
                       "CV_ARRAY",
                       "CV_CUSTOM_CARRAY",
-                      "CV_BIG_UINT",
+                      "CV_BIG_UINT"
                      ],
     "opencv_hack": 1,
 }
