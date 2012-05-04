@@ -329,7 +329,7 @@ sub handle_type {
       if ($inner_c_name ~~ ['unsigned char', 'unsigned short', 'unsigned int',
                             'unsigned long long']) {
         $self->typemap->add_typemap(ctype => $c_name, xstype => 'T_UV');
-      } elsif ($inner_c_name ~~ ['unsigned char', 'const unsigned short', 'const unsigned int',
+      } elsif ($inner_c_name ~~ ['const unsigned char', 'const unsigned short', 'const unsigned int',
                                  'const unsinged long long']) {
         # Looses a "const"
         $self->typemap->add_typemap(ctype => $c_name, xstype => 'T_UV');
@@ -342,6 +342,8 @@ sub handle_type {
                                             105, # record
                                             106, # enum
                                            ]) {
+        say "Typemap entry for $c_name to $inner_xs_name";
+
         $self->typemap->add_typemap(ctype => $c_name,
                                     xstype => $inner_xs_name);
       } else {
@@ -734,6 +736,7 @@ sub handle_function {
       return;
     } elsif ($spelling =~ m/^operator([-()*\[\]=!&+><\/|^~]+)$/) {
       $operator = $1;
+      $call_spelling = "operator$1";
       $spelling = $1;
       $spelling = join '_', map {charnames::viacode(ord $_)} split //, $1;
       $spelling =~ s/ /_/g;
@@ -789,16 +792,14 @@ sub handle_function {
 
   # inline uchar saturate_cast(schar v) { return (uchar)std::max((int)v, 0); }
 
-  warn "thingy: $filename line $line" if $spelling eq 'saturate_cast___c_3Aoperations_2Ehpp_403665_40N_40cv_40F_40saturate_5Fcast_23C_23';
-
-  say "Display name: ", $cursor->getCursorDisplayName;
-  say "Declared at $filename line $line";
+  #say "Display name: ", $cursor->getCursorDisplayName;
+  #say "Declared at $filename line $line";
   # Always 71, "CXCursor_NoDeclFound".
   #my $template_cursor_kind = $cursor->getTemplateCursorKind;
   #say "Template cursor kind: $template_cursor_kind";
   my $specialized_cursor = $cursor->getSpecializedCursorTemplate;
-  say "Specialized cursor kind: ", $specialized_cursor->getCursorKind;
-  say "Specialized cursor spelling: ", $specialized_cursor->getCursorSpelling;
+  #say "Specialized cursor kind: ", $specialized_cursor->getCursorKind;
+  #say "Specialized cursor spelling: ", $specialized_cursor->getCursorSpelling;
 
   my $template_args_count = undef;
 
@@ -850,7 +851,7 @@ sub handle_function {
                            my $spelling = $arg_cursor->getCursorSpelling // 'unspelt';
 
                            my $arg_kind = $arg_cursor->getCursorKind;
-                           say "at $filename $line, kind=$arg_kind spelling $spelling";
+                           #say "at $filename $line, kind=$arg_kind spelling $spelling";
 
                            given ($arg_cursor->getCursorKind) {
                              when (10) {
@@ -926,7 +927,7 @@ sub handle_function {
     return;
   }
 
-  if (@template_args != $template_args_count||0) {
+  if (@template_args != ($template_args_count||0)) {
     warn "Unexpected number of template args, wanted $template_args_count, got ", 0+@template_args;
   }
 
@@ -957,62 +958,37 @@ sub handle_function {
 
   my $package_line = "MODULE = $package  PACKAGE = $package";
 
-  if ($self->type_is_reference($return_type)) {
-    if (!$arguments_def_str) {
-
-      $self->xs_file->print(<<END);
-
-$package_line
-
-# CASE A
-
-$return_type_c
-$spelling($arguments_def_str);
-
-END
-    }
-    die "Return type is a reference type ($return_type_c) on $spelling (because of ".$todo_item->{why}.")";
-  } elsif ("$spelling" eq "$namespaced_name") {
-    
-    $self->xs_file->print(<<END);
-
-$package_line
-
-# CASE B
-
-$return_type_c
-$spelling($arguments_def_str);
-
-END
-  } elsif ($flavour eq 'destructor') {
+  my $retval_eq;
+  my $output;
+  if ($return_type_c eq 'void') {
+    $retval_eq = '';
+    $output = '';
+  } else {
+    $retval_eq = 'RETVAL =';
+    $output = " OUTPUT:\n  RETVAL";
+  }
+  
+  if ($flavour eq 'destructor') {
     # Just ignore it for now.
 
-  } elsif ($flavour eq 'function' and $return_type_c eq 'void') {
+  } elsif ($flavour eq 'function') {
     $self->xs_file->print(<<END);
 
 $package_line
 
-# CASE C
+# CASE C/H
 
-void
+$return_type_c
 $spelling($arguments_def_str)
  CODE:
-  $namespaced_name($arguments_use_str);
+  $retval_eq $call_spelling($arguments_use_str);
+$output
 
 END
   } elsif ($flavour eq 'operator') {
-    my $retval_eq;
-    my $output;
-    if ($return_type_c eq 'void') {
-      $retval_eq = '';
-      $output = '';
-    } else {
-      $retval_eq = 'RETVAL =';
-      $output = " OUTPUT:\n  RETVAL\n";
-    }
 
     given($operator) {
-      when (['()', '[]']) {
+      when (['()', '[]', '->']) {
         # circumfixish?  What is the best term for this?
         my ($left, $right) = split //, $operator;
 
@@ -1025,21 +1001,20 @@ $package_line
 $return_type_c
 $spelling($arguments_def_str)
  CODE:
-  $retval_eq THIS${left}${arguments_use_str}${right};
+  $retval_eq THIS.$call_spelling(${arguments_use_str});
 $output
 
 END
       }
 
-      when (['->', 
-             sub {
+      when ([sub {
                (($operator eq '*') and
                 # * with one argument is a binary operator (multipication).  If it had no arguments, it'd be a prefix deref operator.
                 (@$arguments == 1)
                )
              }]) {
-        # Binary operators
-        my $right = $arguments->[1][1];
+        # prefix uniary operators
+        my $right = $arguments->[0][1];
 
         $self->xs_file->print(<<END);
 
@@ -1073,7 +1048,7 @@ $package_line
 $return_type_c
 $spelling($arguments_def_str)
  CODE:
-  $retval_eq ${operator}THIS;
+  $retval_eq THIS.$call_spelling($arguments_use_str);
 $output
 
 END
@@ -1083,53 +1058,23 @@ END
         die "Don't have output template for operator $operator";
       }
     }
-
-  } elsif ($flavour eq 'method' and $return_type_c eq 'void') {
-    $self->xs_file->print(<<END);
-
-$package_line
-
-# CASE G
-
-void
-$spelling($arguments_def_str)
- CODE:
-  THIS.$call_spelling($arguments_use_str);
-
-END
-  } elsif ($return_type_c eq 'void') {
-    die "flavour=$flavour, returning void";
-
-  } elsif ($flavour eq 'function') {
-    $self->xs_file->print(<<END);
-
-$package_line
-
-# CASE H
-
-$return_type_c
-$spelling($arguments_def_str)
- CODE:
-  RETVAL = $call_spelling($arguments_use_str);
- OUTPUT:
-  RETVAL
-
-END
   } elsif ($flavour eq 'method') {
     $self->xs_file->print(<<END);
 
 $package_line
 
-# CASE I
+# CASE G/I
 
 $return_type_c
 $spelling($arguments_def_str)
  CODE:
-  RETVAL = THIS.$call_spelling($arguments_use_str);
- OUTPUT:
-  RETVAL
+  $retval_eq THIS.$call_spelling($arguments_use_str);
+$output
 
 END
+  } elsif ($return_type_c eq 'void') {
+    die "flavour=$flavour, returning void";
+
   } elsif ($flavour eq 'constructor') {
     $self->xs_file->print(<<END);
 
@@ -1140,7 +1085,7 @@ $package_line
 $return_type_c
 $spelling($arguments_def_str)
  CODE:
-  RETVAL = new $return_type_c($arguments_use_str);
+  RETVAL = *(new $return_type_c($arguments_use_str));
  OUTPUT:
   RETVAL
 
@@ -1885,7 +1830,7 @@ sub handle_record {
   my $own_cursor = $todo_item->{cursor};
   my $own_type = $own_cursor->getCursorType;
   my $spelling = $own_cursor->getCursorSpelling;
-  say "spelling: $spelling";
+  #say "spelling: $spelling";
 
   push @$todo, {
                 type => $own_type,
@@ -1893,9 +1838,9 @@ sub handle_record {
                };
 
   my $own_c_name = $self->type_to_c_name($own_type);
-  say "own c name: $own_c_name";
+  #say "own c name: $own_c_name";
   my $own_perl_name = $self->type_to_perl_name($own_type);
-  say "own perl name: $own_perl_name";
+  #say "own perl name: $own_perl_name";
 
   my $access;
   given ($own_cursor->getCursorKind) {
@@ -1941,7 +1886,7 @@ sub handle_record {
                 die "New access level $new_access is unknown";
               }
             }
-            say "access level changed to $access";
+            #say "access level changed to $access";
           }
           when (1) {
             warn "Unexposed declaration in record";
@@ -2062,10 +2007,11 @@ sub type_to_c_name {
   #print STDERR "Type kind: $type_kind\n";
   #my $spelling = $type->getTypeDeclaration->getCursorSpelling;
   my $spelling = $self->namespaced_name($type->getTypeDeclaration);
-  #print STDERR "Spelling: $spelling\n";
 
   my $const = $type->isConstQualifiedType ? "const " : "";
   #print STDERR "Const: $const\n";
+
+  my $print_spelling = $spelling // '(none)';
 
   state $simple_type_kinds = {
                               2 => 'void',
@@ -2092,6 +2038,9 @@ sub type_to_c_name {
   } elsif ($type_kind == 105 and $spelling) {
     # Record type, could be a struct, could be a class.  Unfortunately, this is one of the few places where it matters.
     my $decl_kind = $type->getTypeDeclaration->getCursorKind;
+
+    # Right, this seems to be where templates "happen"...
+
     given ($decl_kind) {
       when (2) {
         ##   CXCursor_StructDecl                    = 2,
@@ -2111,6 +2060,7 @@ sub type_to_c_name {
     }
 
   } elsif ($type_kind == 107 and $spelling) {
+    # Typedef
     my $canon = $type->getCanonicalType;
     my $ref = $self->type_is_reference($canon);
 
