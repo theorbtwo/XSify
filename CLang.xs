@@ -113,6 +113,8 @@ clang_getTemplateCursorKind(CXCursor C);
 CXCursor
 clang_getSpecializedCursorTemplate(CXCursor C);
 
+CXCursor
+clang_getCursorReferenced(CXCursor C);
 
 MODULE = CLang::String  PACKAGE = CLang::String  PREFIX = clang_
 

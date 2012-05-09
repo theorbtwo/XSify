@@ -1,0 +1,13 @@
+*~
+*~
+*.bs
+blib
+*.log
+MYMETA.json
+MYMETA.yml
+Makefile
+Makefile.old
+*.c
+*.o
+\#*#
+cifs*
