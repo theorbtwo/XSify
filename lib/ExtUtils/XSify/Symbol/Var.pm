@@ -4,7 +4,7 @@ use Moose;
 use MooseX::StrictConstructor;
 use Try::Tiny;
 
-extends 'ExtUtils::XSify::SymbolDecl';
+extends 'ExtUtils::XSify::Symbol';
 
 sub return_type {
   my ($self) = @_;

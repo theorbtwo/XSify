@@ -1,4 +1,4 @@
-package ExtUtils::XSify::SymbolDecl;
+package ExtUtils::XSify::Symbol;
 use 5.10.0;
 use warnings;
 use strict;
@@ -25,7 +25,6 @@ sub location {
 sub unsupported {
   my ($self) = @_;
 
-  $DB::single=1;
   # Variables which are inside namespaces that are really templates.
   # return from Try::Tiny's catch clause doesn't dwim.
   my $ret1;
@@ -109,6 +108,29 @@ sub to_do_mark {
   my ($self) = @_;
 
   $self->cursor->getCursorUSR;
+}
+
+sub factory {
+  my ($self, %args) = @_;
+  my ($cursor) = $args{cursor};
+
+  my $kind = $cursor->getCursorKind;
+
+  my $kinds = {
+               8 => 'Function',
+               9 => 'Var',
+               21 => 'Method',
+               24 => 'Constructor',
+               25 => 'Destructor',
+               26 => 'Conversion',
+              };
+
+  my $class = $kinds->{$kind} or die "Don't know what to do with a cursor kind $kind in Symbol";
+  $class = "ExtUtils::XSify::Symbol::$class";
+  #Class::MOP::load_class($class);
+  eval "use $class; 1" or die "$@";
+
+  $class->new(%args);
 }
 
 'Formerly known as Prince';

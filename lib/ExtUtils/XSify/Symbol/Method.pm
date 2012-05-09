@@ -1,8 +1,8 @@
-package ExtUtils::XSify::Destructor;
+package ExtUtils::XSify::Symbol::Method;
 use Moose;
 use MooseX::StrictConstructor;
 
-extends 'ExtUtils::XSify::FunctionDecl';
+extends 'ExtUtils::XSify::Symbol::Function';
 
 has 'access', is => 'ro';
 

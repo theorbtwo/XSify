@@ -1,28 +1,9 @@
-package ExtUtils::XSify::Type::Record;
+package ExtUtils::XSify::Type::Explicit::Record;
 use 5.10.0;
 use Moose;
 use MooseX::StrictConstructor;
 
-has 'type',
-  is => 'ro',
-  required => 1,
-  isa => 'CLang::Type'
-  ;
-
-has 'decl',
-  is => 'ro',
-  lazy => 1,
-  default => sub {
-    my ($self) = @_;
-
-    $self->type->getTypeDeclaration;
-  };
-
-sub to_do_mark {
-  my ($self) = @_;
-
-  return "record:".$self->decl->getCursorUSR;
-}
+extends 'ExtUtils::XSify::Type::Explicit';
 
 sub fields {
   my ($self) = @_;
@@ -31,7 +12,7 @@ sub fields {
 
   my @fields;
 
-  $self->decl->visitChildren
+  $self->cursor->visitChildren
     (sub {
        my ($cursor) = @_;
 
@@ -39,7 +20,8 @@ sub fields {
 
        given ($kind) {
 
-         when ([5,  # enum
+         when ([2,  # struct
+                5,  # enum
                 6,  # field
                ]) {
            push @fields, {access => $access,
@@ -54,7 +36,7 @@ sub fields {
                 21, # method
                 24, # constructor
                 25, # destructor
-                25, # conversion
+                26, # conversion
                ]) {
          }
          
@@ -76,7 +58,9 @@ sub fields {
          }
 
          default {
-           die "Don't know child kind $kind of a record (".$self->location.")";
+           my $spelling = $cursor->getCursorSpelling;
+           print "In fields, self=$self\n";
+           die "Don't know child kind $kind of a record (".$self->location."), spelling='$spelling'";
          }
        }
 

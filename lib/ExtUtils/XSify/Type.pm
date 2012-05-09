@@ -21,7 +21,8 @@ sub new {
     confess "Type->new didn't get passed a parent_cursor";
   }
 
-  my $kind = $type->getTypeKind;
+  my $type_kind = $type->getTypeKind;
+  my $decl_kind = $type->getTypeDeclaration->getCursorKind;
 
   my $class;
 
@@ -41,31 +42,45 @@ sub new {
                        23 => 'long double',
                       };
 
-  my @basic_type_numbers = keys %$basic_type;
+  if ($basic_type->{$type_kind}) {
+    my $basic_type_name = $basic_type->{$type_kind};
 
-  given ($kind) {
-    when (\@basic_type_numbers) {
-      my $basic_type_name = $basic_type->{$kind};
+    my $class = "ExtUtils::XSify::Type::Basic::$basic_type_name";
+    $class =~ s/ /_/g;
+    eval "use $class; 1" or die $@;
 
-      my $class = "ExtUtils::XSify::Type::Basic::$basic_type_name";
-      $class =~ s/ /_/g;
-      eval "use $class; 1" or die $@;
+    return $class->new;
+  }
 
-      return $class->new;
-    }
+  state $explicit_type = {2 => 'Struct',
+                          4 => 'Class',
+                          5 => 'Enum',
+                          20 => 'Typedef',
+                         };
 
+  if ($explicit_type->{$decl_kind}) {
+    my $explicit_type_name = $explicit_type->{$decl_kind};
+
+    my $class = "ExtUtils::XSify::Type::Explicit::$explicit_type_name";
+    eval "use $class; 1" or die $@;
+
+    return $class->new(cursor => $type->getTypeDeclaration);
+  }
+
+  given ($type_kind) {
     when (1) {
       # "Unhandled"
       #  libclang isn't good enough to do anything useful here for us, so we
       #  need to do it by ourselves.
-
+      
       return $self->new_for_strangeness(%args);
     }
-
+    
     when (2) {
       # void
       return undef;
     }
+
 
     when (100) {
       $class = 'ExtUtils::XSify::Type::Complex';
@@ -79,36 +94,8 @@ sub new {
       $class = 'ExtUtils::XSify::Type::LValueReference';
     }
 
-    when (105) {
-      my $decl_kind = $type->getTypeDeclaration->getCursorKind;
-      given ($decl_kind) {
-        when (2) {
-          # StructDecl
-          $class = 'ExtUtils::XSify::Type::Struct';
-        }
-
-        when (4) {
-          # ClassDecl
-          $class = 'ExtUtils::XSify::Type::Class';
-        }
-
-        default {
-          die "Don't know decl_kind $decl_kind of record subtype";
-        }
-      }
-      #$class = 'ExtUtils::XSify::Type::Record';
-    }
-
-    when (106) {
-      $class = 'ExtUtils::XSify::Type::Enum';
-    }
-
-    when (107) {
-      $class = 'ExtUtils::XSify::Type::Typedef';
-    }
-
     default {
-      die "Do not know how to create an ExtUtils::XSify::Type for a type of kind $kind";
+      die "Do not know how to create an ExtUtils::XSify::Type for a type of kind $type_kind, decl kind $decl_kind";
     }
   }
 

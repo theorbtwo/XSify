@@ -1,4 +1,4 @@
-package ExtUtils::XSify::FunctionDecl;
+package ExtUtils::XSify::Symbol::Function;
 use Moose;
 use MooseX::StrictConstructor;
 use 5.10.0;
@@ -6,7 +6,7 @@ use 5.10.0;
 use ExtUtils::XSify::Type;
 use ExtUtils::XSify::Type::Template;
 
-extends 'ExtUtils::XSify::SymbolDecl';
+extends 'ExtUtils::XSify::Symbol';
 
 # FIXME: Where does this belong?
 sub dump_visit_tree {

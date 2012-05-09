@@ -4,8 +4,7 @@ use warnings;
 use strict;
 use Moose;
 use MooseX::StrictConstructor;
-use ExtUtils::XSify::FunctionDecl;
-use ExtUtils::XSify::VarDecl;
+use ExtUtils::XSify::Symbol;
 
 has 'translation_unit',
   is => 'ro',
@@ -24,7 +23,7 @@ has 'cursor',
 sub to_do_mark {
   my ($self) = @_;
 
-  $self->cursor->getCursorUSR;
+  'translation_unit';
 }
 
 sub more_to_do {
@@ -73,21 +72,14 @@ sub more_to_do {
                                    }
 
                                    when ([8,  # FunctionDecl
+                                          9,  # VarDecl
                                           21, # CXXMethod
                                           24, # Constructor
                                           25, # Destructor
                                           26, # ConversionFunction
                                          ]) {
                                      #print "Pushing $usr\n";
-                                     my $symbol = ExtUtils::XSify::FunctionDecl->new(cursor => $cursor);
-                                     push @stuff, $symbol;
-                                     return 1;
-                                   }
-
-                                   when ([9]) {
-                                     # VarDecl
-                                     # print "Pushing $usr\n";
-                                     my $symbol = ExtUtils::XSify::VarDecl->new(cursor => $cursor);
+                                     my $symbol = ExtUtils::XSify::Symbol->factory(cursor => $cursor);
                                      push @stuff, $symbol;
                                      return 1;
                                    }
@@ -96,7 +88,7 @@ sub more_to_do {
                                      print "USR: $usr\n";
                                      print "Kind: $kind\n";
 
-                                     die "Unhandled kind $kind in symbols";
+                                     die "Unhandled kind $kind in TranslationUnit";
                                    }
                                  }
                                });
