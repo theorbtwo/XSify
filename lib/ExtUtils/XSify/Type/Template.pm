@@ -30,6 +30,10 @@ has 'num_parameters',
     return $n;
   };
 
+sub to_do_mark {
+  return 'template:'.$_[0]->template_cursor->getCursorUSR;
+}
+
 sub instance {
   my ($self, $parameters) = @_;
 

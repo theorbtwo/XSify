@@ -8,6 +8,10 @@ use Carp;
 # no moose, this is just a factory.
 
 sub new {
+  factory(@_);
+}
+
+sub factory {
   my ($self, %args) = @_;
   my $type = $args{type};
   my $location = $args{location};
@@ -52,6 +56,15 @@ sub new {
     return $class->new;
   }
 
+  if ($type_kind == 1) {
+    # "Unhandled"
+    #  libclang isn't good enough to do anything useful here for us, so we
+    #  need to do it by ourselves.
+    
+    return $self->new_for_strangeness(%args);
+  }
+
+  # This must come *after* checking for type_kind = 1, or we fail to get template arguments.
   state $explicit_type = {2 => 'Struct',
                           4 => 'Class',
                           5 => 'Enum',
@@ -67,45 +80,37 @@ sub new {
     return $class->new(cursor => $type->getTypeDeclaration);
   }
 
+  state $implicit_type = {
+                          100 => 'Complex',
+                          101 => 'Pointer',
+                          103 => 'LValueReference',
+                          112 => 'ConstantArray',
+                         };
+
+  if ($implicit_type->{$type_kind}) {
+    my $type_name = $implicit_type->{$type_kind};
+
+    my $class = "ExtUtils::XSify::Type::$type_name";
+    eval "use $class; 1" or die $@;
+
+    return $class->new(type => $type,
+                       location => $location,
+                       parent_cursor => $args{parent_cursor}
+                      );
+  }
+
   given ($type_kind) {
-    when (1) {
-      # "Unhandled"
-      #  libclang isn't good enough to do anything useful here for us, so we
-      #  need to do it by ourselves.
-      
-      return $self->new_for_strangeness(%args);
-    }
-    
     when (2) {
       # void
       return undef;
     }
 
-
-    when (100) {
-      $class = 'ExtUtils::XSify::Type::Complex';
-    }
-
-    when (101) {
-      $class = 'ExtUtils::XSify::Type::Pointer';
-    }
-
-    when (103) {
-      $class = 'ExtUtils::XSify::Type::LValueReference';
-    }
-
     default {
-      die "Do not know how to create an ExtUtils::XSify::Type for a type of kind $type_kind, decl kind $decl_kind";
+      die "Do not know how to create an ExtUtils::XSify::Type for a type of kind $type_kind, decl kind $decl_kind at ".$location;
     }
   }
 
-  eval "use $class; 1" or die $@;
-  
-  print "Pasing off to $class\n";
-
-  return $class->new(type => $type,
-                     location => $location,
-                     parent_cursor => $args{parent_cursor});
+  die "huh?  what?  How'd I get here?";
 }
 
 
@@ -138,12 +143,11 @@ sub new_for_namespaced {
 
   Dump \%args;
 
-  ExtUtils::XSify::FunctionDecl::dump_visit_tree($args{parent_cursor});
+  ExtUtils::XSify::Symbol::Function::dump_visit_tree($args{parent_cursor});
 
   # namespaced types?
   #    template<> bool CommandLineParser::get<bool>(const std::string& name, bool space_delete);
   #    ... but we actually get here for std::string name?
-
 
   my ($ns_type);
 
@@ -235,7 +239,7 @@ sub new_for_templates {
 
   Dump \%args;
 
-  ExtUtils::XSify::FunctionDecl::dump_visit_tree($args{parent_cursor});
+  ExtUtils::XSify::Symbol::Function::dump_visit_tree($args{parent_cursor});
 
   # Nested templates
 

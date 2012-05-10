@@ -35,6 +35,8 @@ sub output_name {
     return 'void*';
   }
 
+  print "LValueReference output_name, pointee is $pointee\n";
+
   return $pointee->output_name.'&';
 }
 

@@ -116,6 +116,14 @@ sub args {
   return @args;
 }
 
+sub self_arg_list_decl {
+  '';
+}
+
+sub invocant {
+  '';
+}
+
 sub make_xs {
   my ($self, $xs, $pm, $typemap) = @_;
 
@@ -143,11 +151,17 @@ sub make_xs {
   my $arg_list_decl = join(', ', map { $_->{type}->output_name . " $_->{name}"} @args);
   my $arg_list_use = join(', ', map { "$_->{name}" } @args);
 
+  my $self_arg_list_decl = $self->self_arg_list_decl;
+  my $invocant = $self->invocant;
+
+  my $location = $self->location;
+
   my $text = <<END;
 $return_type_c
-$extended_name($arg_list_decl)
+$extended_name($self_arg_list_decl $arg_list_decl)
  CODE:
-  $retval_eq $short_c_name($arg_list_use);
+  /* $location $self */
+  $retval_eq$invocant$short_c_name($arg_list_use);
 $output_section
 END
 

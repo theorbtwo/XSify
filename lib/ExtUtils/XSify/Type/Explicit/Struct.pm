@@ -11,4 +11,8 @@ sub output_name {
   return 'struct '.$name;
 }
 
+sub initial_access {
+  'public';
+}
+
 'Takes a kickin and keeps on lickin';

@@ -19,4 +19,12 @@ sub location {
   return "$presumed_filename:$presumed_line";
 }
 
+sub perl_module {
+  ExtUtils::XSify::Symbol::perl_module(@_);
+}
+
+sub cpp_namespace {
+  ExtUtils::XSify::Symbol::cpp_namespace(@_);
+}
+
 'I think, therefore I am.';

@@ -19,16 +19,18 @@ sub fields {
        my $kind = $cursor->getCursorKind;
 
        given ($kind) {
-
          when ([2,  # struct
                 5,  # enum
                 6,  # field
                ]) {
+           my $name = $cursor->getCursorSpelling;
+           my $location = $self->location;
            push @fields, {access => $access,
                           name => $cursor->getCursorSpelling,
                           cursor => $cursor,
-                          type => ExtUtils::XSify::Type->new(parent_cursor => $cursor,
-                                                             type => $cursor->getCursorType),
+                          type => ExtUtils::XSify::Type->factory(parent_cursor => $cursor,
+                                                                 location => "field(ish) $name of $location",
+                                                                 type => $cursor->getCursorType),
                          };
          }
          
@@ -38,6 +40,10 @@ sub fields {
                 25, # destructor
                 26, # conversion
                ]) {
+         }
+
+         when (20) {
+           # Typedef.  Ignore; things that use the typedef will point to this for us.
          }
          
          when (30) {
